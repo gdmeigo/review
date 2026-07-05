@@ -606,6 +606,10 @@ function AddLessonForm({ onCancel, onCreate }) {
 function SheetSyncPanel({ onImportRows }) {
   const [status, setStatus] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
+  const csvExample = `lesson,item,image,sentence,choices,answer,audio,note
+WorkP22,1,https://example.com/picture1.png,This is a {{man}}.,man|woman,,https://example.com/audio1.mp3,{{ }} の中が空欄になります
+WorkP22,1,https://example.com/picture1.png,Her {{book}} is on the {{table}}.,book|bag|table|desk,,,
+WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,____ を使う場合は answer に正解を書きます`;
 
   const doFileImport = async (file) => {
     if (!file) return;
@@ -642,6 +646,15 @@ function SheetSyncPanel({ onImportRows }) {
           <li>読み込むと現在のレッスン内容がファイルの内容に置き換わります</li>
         </ol>
       )}
+      <div className="mb-3 rounded border border-[#b7d6e6] bg-white/70 p-3 text-xs text-[#42677a]">
+        <div className="mb-2 font-display font-bold text-[#16475f]">CSV記載例</div>
+        <p className="mb-2">
+          <span className="font-mono">choices</span> は1つの列にまとめ、
+          <span className="font-mono"> man|woman|girl </span>
+          のように区切って書きます。問題では選択肢がランダム順で表示されます。
+        </p>
+        <pre className="overflow-x-auto whitespace-pre rounded bg-[#f4fbfd] p-2 font-mono text-[10px] leading-5 text-[#16475f]">{csvExample}</pre>
+      </div>
       <a
         href={DEFAULT_SHEET_DOWNLOAD_URL}
         target="_blank"
