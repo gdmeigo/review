@@ -121,9 +121,13 @@ function normalizeAudioUrl(url) {
   if (!trimmed) return "";
   const driveFileId = getGoogleDriveFileId(trimmed);
   if (driveFileId) {
-    return `https://docs.google.com/uc?export=open&id=${encodeURIComponent(driveFileId)}`;
+    return `https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/preview`;
   }
   return trimmed;
+}
+function getGoogleDrivePreviewUrl(url) {
+  const driveFileId = getGoogleDriveFileId(url);
+  return driveFileId ? `https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/preview` : "";
 }
 function splitChoices(value) {
   return (value || "")
@@ -629,6 +633,8 @@ function AudioButton({ src, label = "音声" }) {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const [showDrivePlayer, setShowDrivePlayer] = useState(false);
+  const drivePreviewUrl = getGoogleDrivePreviewUrl(src);
   const playableSrc = normalizeAudioUrl(src);
 
   useEffect(() => {
@@ -641,6 +647,30 @@ function AudioButton({ src, label = "音声" }) {
   }, []);
 
   if (!playableSrc) return null;
+
+  if (drivePreviewUrl) {
+    return (
+      <span className="inline-flex max-w-full flex-col items-start gap-2">
+        <button
+          type="button"
+          onClick={() => setShowDrivePlayer((v) => !v)}
+          className="inline-flex items-center gap-1 rounded border border-[#73bfd7] px-2 py-1 text-[11px] text-[#166078] hover:bg-[#e8f7fb]"
+          title={label}
+        >
+          <Volume2 size={13} />
+          {showDrivePlayer ? "閉じる" : label}
+        </button>
+        {showDrivePlayer && (
+          <iframe
+            src={drivePreviewUrl}
+            title={label}
+            allow="autoplay"
+            className="h-20 w-64 max-w-full rounded border border-[#b7d6e6] bg-white"
+          />
+        )}
+      </span>
+    );
+  }
 
   const handlePlay = async () => {
     setHasError(false);
