@@ -633,7 +633,6 @@ function AudioButton({ src, label = "音声" }) {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasError, setHasError] = useState(false);
-  const [showDrivePlayer, setShowDrivePlayer] = useState(false);
   const drivePreviewUrl = getGoogleDrivePreviewUrl(src);
   const playableSrc = normalizeAudioUrl(src);
 
@@ -650,24 +649,17 @@ function AudioButton({ src, label = "音声" }) {
 
   if (drivePreviewUrl) {
     return (
-      <span className="inline-flex max-w-full flex-col items-start gap-2">
-        <button
-          type="button"
-          onClick={() => setShowDrivePlayer((v) => !v)}
-          className="inline-flex items-center gap-1 rounded border border-[#73bfd7] px-2 py-1 text-[11px] text-[#166078] hover:bg-[#e8f7fb]"
-          title={label}
-        >
+      <span className="inline-flex max-w-full flex-col items-start gap-1">
+        <span className="inline-flex items-center gap-1 text-[11px] text-[#166078]">
           <Volume2 size={13} />
-          {showDrivePlayer ? "閉じる" : label}
-        </button>
-        {showDrivePlayer && (
-          <iframe
-            src={drivePreviewUrl}
-            title={label}
-            allow="autoplay"
-            className="h-20 w-64 max-w-full rounded border border-[#b7d6e6] bg-white"
-          />
-        )}
+          {label}
+        </span>
+        <iframe
+          src={drivePreviewUrl}
+          title={label}
+          allow="autoplay"
+          className="h-20 w-64 max-w-full rounded border border-[#b7d6e6] bg-white"
+        />
       </span>
     );
   }
