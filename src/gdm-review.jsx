@@ -418,6 +418,7 @@ export default function App() {
             {screen.name === "home" && (
               <Home
                 index={index}
+                perfectByLesson={stats.perfectByLesson || {}}
                 onOpen={(id) => setScreen({ name: "review", id })}
               />
             )}
@@ -445,7 +446,11 @@ export default function App() {
                   await persistProgress(screen.id, nextProgress);
                   const dates = new Set(stats.reviewDates || []);
                   dates.add(todayStr());
-                  await persistStats({ xp: (stats.xp || 0) + result.xpEarned, reviewDates: Array.from(dates) });
+                  const perfectByLesson = { ...(stats.perfectByLesson || {}) };
+                  if (result.total > 0 && result.correct === result.total) {
+                    perfectByLesson[screen.id] = (perfectByLesson[screen.id] || 0) + 1;
+                  }
+                  await persistStats({ ...stats, xp: (stats.xp || 0) + result.xpEarned, reviewDates: Array.from(dates), perfectByLesson });
                   setScreen({ name: "summary", id: screen.id, result });
                 }}
                 onExit={() => setScreen({ name: "home" })}
@@ -491,7 +496,7 @@ function TopBar({ screen, setScreen, xp, streak }) {
 }
 
 /* ---------------- Home ---------------- */
-function Home({ index, onOpen }) {
+function Home({ index, perfectByLesson, onOpen }) {
   return (
     <div className="pt-6">
       <p className="text-[11px] text-[#42677a] mb-5 font-mono">復習の記録(習熟度・XP)は自分だけに保存されます。</p>
@@ -510,11 +515,27 @@ function Home({ index, onOpen }) {
             <div className="flex-1 min-w-0">
               <div className="font-display text-[#16475f] text-lg font-semibold truncate">{meta.title}</div>
               <div className="font-mono text-xs text-[#42677a]">{meta.count || 0} 枚のカード</div>
+              <PerfectBadges count={perfectByLesson[meta.id] || 0} />
             </div>
             <ChevronRight className="text-[#1687a7]" size={20} />
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+function PerfectBadges({ count }) {
+  if (!count) return null;
+  const visible = Math.min(count, 5);
+  return (
+    <div className="mt-2 flex items-center gap-1" aria-label={`全問正解 ${count}回`}>
+      {Array.from({ length: visible }).map((_, index) => (
+        <span key={index} className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#d7f5eb] text-[12px] text-[#16805d] shadow-sm">
+          ✓
+        </span>
+      ))}
+      {count > visible && <span className="font-mono text-[10px] text-[#16805d]">+{count - visible}</span>}
     </div>
   );
 }
