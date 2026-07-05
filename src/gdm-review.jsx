@@ -29,7 +29,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const emptyProgress = () => ({ level: 0, dueAt: 0, lastReview: 0 });
 const DRIVE_IMAGE_SIZE = "w1000";
-const DEFAULT_SHEET_URL = "https://drive.google.com/file/d/117Tn1jy5gdE2GwzZ4_g7cawR05z8pfDE/view?usp=drive_link";
+const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1NbV4QywhVxkT8iOs11CSM-12llyQhrtdVj0Gvs8dO84/edit?usp=drive_link";
 const DEFAULT_SHEET_DOWNLOAD_URL = normalizeSheetUrl(DEFAULT_SHEET_URL);
 
 function getGoogleDriveFileId(url) {
@@ -66,6 +66,16 @@ function normalizeImageUrl(url) {
 
 function normalizeSheetUrl(url) {
   const trimmed = (url || "").trim();
+  try {
+    const parsed = new URL(trimmed);
+    const sheetMatch = parsed.pathname.match(/\/spreadsheets\/d\/([^/]+)/);
+    if (parsed.hostname.toLowerCase() === "docs.google.com" && sheetMatch) {
+      return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetMatch[1])}/export?format=xlsx`;
+    }
+  } catch {
+    // Fall through to the Drive file normalization below.
+  }
+
   const driveFileId = getGoogleDriveFileId(trimmed);
   if (driveFileId) {
     return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(driveFileId)}&export=download`;
@@ -601,7 +611,7 @@ WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,_
       </button>
       {showHelp && (
         <ol className="text-xs text-[#42677a] list-decimal list-inside mb-3 space-y-1">
-          <li>下の既定CSVをダウンロードするか、自分のCSV/Excelファイルを用意</li>
+          <li>下の既定Excelファイルをダウンロードするか、自分のCSV/Excelファイルを用意</li>
           <li>「CSV/Excelファイルを選んで読み込む」からファイルを選択</li>
           <li>同じ lesson と item の行は、1つの絵に複数の文があるワークシート項目としてまとまります</li>
           <li>読み込むと現在のレッスン内容がファイルの内容に置き換わります</li>
@@ -623,7 +633,7 @@ WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,_
         className="mb-2 w-full rounded-md py-2 flex items-center justify-center gap-2 border border-[#73bfd7] text-[#166078] font-display font-semibold hover:bg-[#e8f7fb]"
       >
         <FileSpreadsheet size={16} />
-        既定CSVをダウンロードする
+        既定Excelファイルをダウンロードする
       </a>
       <label className="mt-2 w-full rounded-md py-2 flex items-center justify-center gap-2 border border-[#73bfd7] text-[#166078] font-display font-semibold cursor-pointer hover:bg-[#e8f7fb]">
         <FileSpreadsheet size={16} />
