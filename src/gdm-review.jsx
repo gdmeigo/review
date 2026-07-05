@@ -575,7 +575,7 @@ WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,_
         <div className="mb-2 font-display font-bold text-[#16475f]">CSV記載例</div>
         <p className="mb-2">
           <span className="font-mono">choices</span> は1つの列にまとめ、
-          <span className="font-mono"> man|woman|girl </span>
+          <span className="font-mono"> man|woman|girlまたはman/woman/girl </span>
           のように区切って書きます。問題では選択肢がランダム順で表示されます。
         </p>
         <pre className="overflow-x-auto whitespace-pre rounded bg-[#f4fbfd] p-2 font-mono text-[10px] leading-5 text-[#16475f]">{csvExample}</pre>
