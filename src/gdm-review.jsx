@@ -673,9 +673,14 @@ function WorksheetLines({ lines, compact = false }) {
 function WorksheetQuestion({ card, selected, onSubmit }) {
   const [fills, setFills] = useState({});
   const lines = card.worksheetLines || [];
+
+  useEffect(() => {
+    setFills({});
+  }, [card.id]);
+
   const shuffledChoicesByLine = useMemo(
     () => lines.map((line) => shuffleList(line.choices || [])),
-    [lines]
+    [card.id, lines]
   );
   const allFilled = lines.every((line, lineIndex) =>
     (line.answers || []).every((_, blankIndex) => fills[`${lineIndex}-${blankIndex}`])
@@ -898,7 +903,7 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
       <div className="card-paper rounded-md border border-[#b7d6e6] p-6 mb-5 text-center relative">
         <div className="punch-hole absolute -top-2 left-1/2 -translate-x-1/2" />
         {q.type === "worksheet" ? (
-          <WorksheetQuestion card={q.card} selected={selected} onSubmit={(isCorrect) => recordAnswer(isCorrect)} />
+          <WorksheetQuestion key={q.card.id} card={q.card} selected={selected} onSubmit={(isCorrect) => recordAnswer(isCorrect)} />
         ) : q.type === "pic2en" ? (
           <div className="flex items-center justify-center min-h-[110px]">
             <CardVisual card={q.card} className="max-h-32 max-w-[220px] object-contain rounded text-7xl" iconSize={64} />
