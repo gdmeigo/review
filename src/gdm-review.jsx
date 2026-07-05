@@ -2,10 +2,10 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import {
-  Plus, Trash2, Pencil, ArrowLeft, Check, X, Play,
+  ArrowLeft, Check, X, Play,
   Flame, Star, ChevronRight, BookOpen, Loader2, RotateCcw,
-  Home as HomeIcon, Settings, Smile, ImageOff,
-  FileSpreadsheet, Link as LinkIcon, Volume2
+  Home as HomeIcon, Settings, ImageOff,
+  FileSpreadsheet, Volume2
 } from "lucide-react";
 
 /* ---------------------------------------------------------
@@ -16,8 +16,8 @@ import {
 
    Content (lessons & cards) is SHARED across everyone using
    this artifact. Each person's own review progress and XP
-   stay PRIVATE to them. Settings can add cards by hand or
-   import a CSV / Excel file — images are just URLs typed into a spreadsheet
+   stay PRIVATE to them. Settings imports a CSV / Excel file —
+   images are just URLs typed into a spreadsheet
    column, no upload needed.
 --------------------------------------------------------- */
 
@@ -25,11 +25,10 @@ const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Fraun
 
 const INTERVAL_DAYS = [0, 1, 2, 4, 7, 14]; // by mastery level 0-5
 const DAY_MS = 24 * 60 * 60 * 1000;
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const emptyProgress = () => ({ level: 0, dueAt: 0, lastReview: 0 });
 const DRIVE_IMAGE_SIZE = "w1000";
-const DEFAULT_SHEET_URL = "https://drive.google.com/file/d/117Tn1jy5gdE2GwzZ4_g7cawR05z8pfDE/view?usp=drive_link";
+const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1NbV4QywhVxkT8iOs11CSM-12llyQhrtdVj0Gvs8dO84/edit?usp=drive_link";
 const DEFAULT_SHEET_DOWNLOAD_URL = normalizeSheetUrl(DEFAULT_SHEET_URL);
 
 function getGoogleDriveFileId(url) {
@@ -40,7 +39,7 @@ function getGoogleDriveFileId(url) {
       const directMatch = parsed.pathname.match(/^\/d\/([^/=]+)/);
       return directMatch ? directMatch[1] : "";
     }
-    if (host !== "drive.google.com" && host !== "docs.google.com") return "";
+    if (host !== "drive.google.com" && host !== "docs.google.com" && host !== "drive.usercontent.google.com") return "";
 
     const fileMatch = parsed.pathname.match(/\/file\/d\/([^/]+)/);
     if (fileMatch) return fileMatch[1];
@@ -66,6 +65,16 @@ function normalizeImageUrl(url) {
 
 function normalizeSheetUrl(url) {
   const trimmed = (url || "").trim();
+  try {
+    const parsed = new URL(trimmed);
+    const sheetMatch = parsed.pathname.match(/\/spreadsheets\/d\/([^/]+)/);
+    if (parsed.hostname.toLowerCase() === "docs.google.com" && sheetMatch) {
+      return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(sheetMatch[1])}/export?format=xlsx`;
+    }
+  } catch {
+    // Fall through to the Drive file normalization below.
+  }
+
   const driveFileId = getGoogleDriveFileId(trimmed);
   if (driveFileId) {
     return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(driveFileId)}&export=download`;
@@ -73,15 +82,6 @@ function normalizeSheetUrl(url) {
 
   return trimmed;
 }
-
-const EMOJI_BANK = {
-  "人": ["🧑", "👦", "👧", "👨", "👩", "👴", "👵", "🧑‍🏫", "🧑‍🎓", "👶"],
-  "もの": ["📕", "✏️", "🖊️", "🪑", "🚪", "🪟", "🗝️", "🕰️", "🍎", "🍞", "🥛", "☕", "🎩", "👞", "🪆", "✉️"],
-  "場所": ["🏠", "🏫", "🌳", "🛣️", "🌉", "🏞️", "🚉", "🏢"],
-  "動作": ["🚶", "🏃", "🖐️", "👉", "🤲", "🪑", "📖", "✍️", "🍽️", "🚪", "🎁", "🤝"],
-  "位置/前置詞": ["⬆️", "⬇️", "⬅️", "➡️", "🔼", "🔽", "🔁", "↔️", "🕳️", "📦"],
-  "数": ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"],
-};
 
 /* ---------------- spreadsheet import helpers ---------------- */
 const FIELD_ALIASES = {
@@ -119,7 +119,15 @@ function slugify(str) {
 function normalizeAudioUrl(url) {
   const trimmed = (url || "").trim();
   if (!trimmed) return "";
-  return getGoogleDriveFileId(trimmed) ? normalizeSheetUrl(trimmed) : trimmed;
+  const driveFileId = getGoogleDriveFileId(trimmed);
+  if (driveFileId) {
+    return `https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/preview`;
+  }
+  return trimmed;
+}
+function getGoogleDrivePreviewUrl(url) {
+  const driveFileId = getGoogleDriveFileId(url);
+  return driveFileId ? `https://drive.google.com/file/d/${encodeURIComponent(driveFileId)}/preview` : "";
 }
 function splitChoices(value) {
   return (value || "")
@@ -336,49 +344,6 @@ export default function App() {
     await safeSet("progress:" + lessonId, JSON.stringify(prog), false);
   }, []);
 
-  // ---- lesson / card mutations ----
-  const updateLessonMeta = async (id, title, emoji) => {
-    const lesson = { ...lessons[id], title, emoji };
-    setLessons((prev) => ({ ...prev, [id]: lesson }));
-    await safeSet("lesson:" + id, JSON.stringify(lesson), true);
-    const newIdx = index.map((m) => (m.id === id ? { ...m, title, emoji } : m));
-    setIndex(newIdx);
-    await safeSet("lesson-index", JSON.stringify(newIdx), true);
-  };
-  const deleteLesson = async (id) => {
-    await safeDelete("lesson:" + id, true);
-    await safeDelete("progress:" + id, false);
-    const newIdx = index.filter((m) => m.id !== id);
-    setIndex(newIdx);
-    await safeSet("lesson-index", JSON.stringify(newIdx), true);
-    setLessons((prev) => {
-      const n = { ...prev };
-      delete n[id];
-      return n;
-    });
-  };
-  const upsertCard = async (lessonId, card) => {
-    const lesson = lessons[lessonId];
-    const exists = lesson.cards.some((c) => c.id === card.id);
-    const cards = exists ? lesson.cards.map((c) => (c.id === card.id ? card : c)) : [...lesson.cards, card];
-    const updated = { ...lesson, cards };
-    setLessons((prev) => ({ ...prev, [lessonId]: updated }));
-    await safeSet("lesson:" + lessonId, JSON.stringify(updated), true);
-    const newIdx = index.map((m) => (m.id === lessonId ? { ...m, count: cards.length } : m));
-    setIndex(newIdx);
-    await safeSet("lesson-index", JSON.stringify(newIdx), true);
-  };
-  const deleteCard = async (lessonId, cardId) => {
-    const lesson = lessons[lessonId];
-    const cards = lesson.cards.filter((c) => c.id !== cardId);
-    const updated = { ...lesson, cards };
-    setLessons((prev) => ({ ...prev, [lessonId]: updated }));
-    await safeSet("lesson:" + lessonId, JSON.stringify(updated), true);
-    const newIdx = index.map((m) => (m.id === lessonId ? { ...m, count: cards.length } : m));
-    setIndex(newIdx);
-    await safeSet("lesson-index", JSON.stringify(newIdx), true);
-  };
-
   // ---- spreadsheet sync ----
   const importRows = async (rows) => {
     const { index: newIndex, lessonsMap: newLessons } = buildContentFromRows(rows);
@@ -453,24 +418,18 @@ export default function App() {
             {screen.name === "home" && (
               <Home
                 index={index}
-                onImportRows={importRows}
                 onOpen={(id) => setScreen({ name: "lesson", id })}
               />
+            )}
+            {screen.name === "settings" && (
+              <SettingsScreen onImportRows={importRows} />
             )}
             {screen.name === "lesson" && lessons[screen.id] && (
               <LessonDetail
                 lesson={lessons[screen.id]}
-                isEditor={true}
                 progress={progressByLesson[screen.id]}
                 onEnsureProgress={() => loadProgress(screen.id)}
                 onBack={() => setScreen({ name: "home" })}
-                onUpdateMeta={(t, e) => updateLessonMeta(screen.id, t, e)}
-                onDeleteLesson={async () => {
-                  await deleteLesson(screen.id);
-                  setScreen({ name: "home" });
-                }}
-                onUpsertCard={(card) => upsertCard(screen.id, card)}
-                onDeleteCard={(cid) => deleteCard(screen.id, cid)}
                 onStartReview={() => setScreen({ name: "review", id: screen.id })}
               />
             )}
@@ -513,7 +472,7 @@ function TopBar({ screen, setScreen, xp, streak }) {
         <div className="flex items-center gap-3 font-mono text-sm shrink-0">
           <div className="flex items-center gap-1 text-[#1687a7]"><Flame size={16} /> {streak}</div>
           <div className="flex items-center gap-1 text-[#16805d]"><Star size={16} /> {xp}</div>
-          <button onClick={() => setScreen({ name: "home" })} className="flex items-center gap-1 text-[10px] bg-[#1687a7] text-white px-2 py-1 rounded" title="設定">
+          <button onClick={() => setScreen({ name: "settings" })} className="flex items-center gap-1 text-[10px] bg-[#1687a7] text-white px-2 py-1 rounded" title="設定">
             <Settings size={12} /> 設定
           </button>
           {screen.name !== "home" && (
@@ -532,7 +491,7 @@ function TopBar({ screen, setScreen, xp, streak }) {
 }
 
 /* ---------------- Home ---------------- */
-function Home({ index, onImportRows, onOpen }) {
+function Home({ index, onOpen }) {
   return (
     <div className="pt-6">
       <p className="text-[11px] text-[#42677a] mb-5 font-mono">レッスン内容は共有されます。復習の記録(習熟度・XP)は自分だけに保存されます。</p>
@@ -540,7 +499,7 @@ function Home({ index, onImportRows, onOpen }) {
       {index.length === 0 && (
         <div className="card-paper rounded-md p-6 text-center mb-4 border border-[#b7d6e6]">
           <p className="font-display text-lg text-[#16475f] mb-1">まだレッスンがありません</p>
-          <p className="text-sm text-[#42677a]">下の設定からCSV/Excelを読み込んでください</p>
+          <p className="text-sm text-[#42677a]">右上の設定からCSV/Excelを読み込んでください</p>
         </div>
       )}
 
@@ -556,7 +515,13 @@ function Home({ index, onImportRows, onOpen }) {
           </button>
         ))}
       </div>
+    </div>
+  );
+}
 
+function SettingsScreen({ onImportRows }) {
+  return (
+    <div className="pt-6">
       <SheetSyncPanel onImportRows={onImportRows} />
     </div>
   );
@@ -593,14 +558,14 @@ WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,_
       <p className="text-xs text-[#42677a] mb-3">
         CSVまたはExcelファイルからワークシートを読み込めます。列は
         <span className="font-mono"> lesson / item / image / sentence / choices / answer / audio / note </span>
-        を使えます。画像と音声はURLで指定できます。
+        を使えます。画像と音声はURLで指定できます。Google Driveの音声はリンクを知っている人が閲覧できる設定にし、アプリ内ではDriveのプレビュープレイヤーで再生します。
       </p>
       <button onClick={() => setShowHelp((s) => !s)} className="text-xs text-[#1687a7] underline mb-3">
         {showHelp ? "手順を隠す" : "読み込み手順を見る"}
       </button>
       {showHelp && (
         <ol className="text-xs text-[#42677a] list-decimal list-inside mb-3 space-y-1">
-          <li>下の既定CSVをダウンロードするか、自分のCSV/Excelファイルを用意</li>
+          <li>下の既定Excelファイルをダウンロードするか、自分のCSV/Excelファイルを用意</li>
           <li>「CSV/Excelファイルを選んで読み込む」からファイルを選択</li>
           <li>同じ lesson と item の行は、1つの絵に複数の文があるワークシート項目としてまとまります</li>
           <li>読み込むと現在のレッスン内容がファイルの内容に置き換わります</li>
@@ -622,7 +587,7 @@ WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,_
         className="mb-2 w-full rounded-md py-2 flex items-center justify-center gap-2 border border-[#73bfd7] text-[#166078] font-display font-semibold hover:bg-[#e8f7fb]"
       >
         <FileSpreadsheet size={16} />
-        既定CSVをダウンロードする
+        既定Excelファイルをダウンロードする
       </a>
       <label className="mt-2 w-full rounded-md py-2 flex items-center justify-center gap-2 border border-[#73bfd7] text-[#166078] font-display font-semibold cursor-pointer hover:bg-[#e8f7fb]">
         <FileSpreadsheet size={16} />
@@ -664,17 +629,76 @@ function CardVisual({ card, className, iconSize = 18 }) {
 }
 
 function AudioButton({ src, label = "音声" }) {
-  if (!src) return null;
+  const audioRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const drivePreviewUrl = getGoogleDrivePreviewUrl(src);
+  const playableSrc = normalizeAudioUrl(src);
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, []);
+
+  if (!playableSrc) return null;
+
+  if (drivePreviewUrl) {
+    return (
+      <span className="inline-flex max-w-full flex-col items-start gap-1">
+        <span className="inline-flex items-center gap-1 text-[11px] text-[#166078]">
+          <Volume2 size={13} />
+          {label}
+        </span>
+        <iframe
+          src={drivePreviewUrl}
+          title={label}
+          allow="autoplay"
+          className="h-20 w-64 max-w-full rounded border border-[#b7d6e6] bg-white"
+        />
+      </span>
+    );
+  }
+
+  const handlePlay = async () => {
+    setHasError(false);
+    if (!audioRef.current || audioRef.current.src !== playableSrc) {
+      if (audioRef.current) audioRef.current.pause();
+      audioRef.current = new Audio(playableSrc);
+      audioRef.current.addEventListener("ended", () => setIsPlaying(false));
+      audioRef.current.addEventListener("pause", () => setIsPlaying(false));
+      audioRef.current.addEventListener("play", () => setIsPlaying(true));
+      audioRef.current.addEventListener("error", () => {
+        setIsPlaying(false);
+        setHasError(true);
+      });
+    }
+
+    try {
+      if (isPlaying) {
+        audioRef.current.pause();
+      } else {
+        await audioRef.current.play();
+      }
+    } catch {
+      setIsPlaying(false);
+      setHasError(true);
+    }
+  };
+
   return (
-    <a
-      href={src}
-      target="_blank"
-      rel="noreferrer"
+    <button
+      type="button"
+      onClick={handlePlay}
       className="inline-flex items-center gap-1 rounded border border-[#73bfd7] px-2 py-1 text-[11px] text-[#166078] hover:bg-[#e8f7fb]"
+      title={hasError ? "音声を再生できませんでした" : label}
     >
       <Volume2 size={13} />
-      {label}
-    </a>
+      {hasError ? "再生不可" : isPlaying ? "停止" : label}
+    </button>
   );
 }
 
@@ -715,9 +739,14 @@ function WorksheetLines({ lines, compact = false }) {
 function WorksheetQuestion({ card, selected, onSubmit }) {
   const [fills, setFills] = useState({});
   const lines = card.worksheetLines || [];
+
+  useEffect(() => {
+    setFills({});
+  }, [card.id]);
+
   const shuffledChoicesByLine = useMemo(
     () => lines.map((line) => shuffleList(line.choices || [])),
-    [lines]
+    [card.id, lines]
   );
   const allFilled = lines.every((line, lineIndex) =>
     (line.answers || []).every((_, blankIndex) => fills[`${lineIndex}-${blankIndex}`])
@@ -788,7 +817,6 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
           </div>
         ))}
       </div>
-      {card.audioUrl && <div className="mt-3 flex justify-center"><AudioButton src={card.audioUrl} /></div>}
       {!selected && (
         <button
           type="button"
@@ -804,14 +832,7 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
 }
 
 /* ---------------- Lesson Detail ---------------- */
-function LessonDetail({ lesson, isEditor, progress, onEnsureProgress, onBack, onUpdateMeta, onDeleteLesson, onUpsertCard, onDeleteCard, onStartReview }) {
-  const [editingMeta, setEditingMeta] = useState(false);
-  const [title, setTitle] = useState(lesson.title);
-  const [emoji, setEmoji] = useState(lesson.emoji);
-  const [showCardForm, setShowCardForm] = useState(false);
-  const [editingCard, setEditingCard] = useState(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-
+function LessonDetail({ lesson, progress, onEnsureProgress, onBack, onStartReview }) {
   useEffect(() => {
     onEnsureProgress();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -826,42 +847,19 @@ function LessonDetail({ lesson, isEditor, progress, onEnsureProgress, onBack, on
       </button>
 
       <div className="card-paper rounded-md p-4 border border-[#b7d6e6] mb-4">
-        {editingMeta ? (
-          <div className="flex gap-3">
-            <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 2))} className="w-12 h-12 text-xl text-center rounded border border-[#b7d6e6]" />
-            <input value={title} onChange={(e) => setTitle(e.target.value)} className="flex-1 rounded border border-[#b7d6e6] px-3 font-display" />
-            <button onClick={() => { onUpdateMeta(title.trim() || lesson.title, emoji || lesson.emoji); setEditingMeta(false); }} className="px-3 rounded bg-[#1687a7] text-[#ffffff] text-sm">保存</button>
+        <div className="flex items-center gap-3">
+          <div className="brass rounded w-11 h-11 flex items-center justify-center text-xl shrink-0">{lesson.emoji}</div>
+          <div className="flex-1">
+            <div className="font-display text-xl font-bold text-[#16475f]">{lesson.title}</div>
+            <div className="font-mono text-xs text-[#42677a]">{lesson.cards.length} 枚</div>
           </div>
-        ) : (
-          <div className="flex items-center gap-3">
-            <div className="brass rounded w-11 h-11 flex items-center justify-center text-xl shrink-0">{lesson.emoji}</div>
-            <div className="flex-1">
-              <div className="font-display text-xl font-bold text-[#16475f]">{lesson.title}</div>
-              <div className="font-mono text-xs text-[#42677a]">{lesson.cards.length} 枚</div>
-            </div>
-            {isEditor && (
-              <>
-                <button onClick={() => setEditingMeta(true)} className="text-[#42677a] hover:text-[#16475f]" aria-label="レッスン名を編集"><Pencil size={16} /></button>
-                <button onClick={() => setConfirmDelete(true)} className="text-[#b42335] hover:text-[#b42335]" aria-label="レッスンを削除"><Trash2 size={16} /></button>
-              </>
-            )}
-          </div>
-        )}
-        {confirmDelete && (
-          <div className="mt-3 text-sm bg-[#fff1f3] border border-[#f0b8c0] rounded p-2 flex items-center justify-between">
-            <span className="text-[#b42335]">このレッスンを削除しますか？カードもすべて消えます。</span>
-            <div className="flex gap-2 shrink-0 ml-2">
-              <button onClick={() => setConfirmDelete(false)} className="text-[#42677a]">やめる</button>
-              <button onClick={onDeleteLesson} className="text-[#b42335] font-semibold">削除</button>
-            </div>
-          </div>
-        )}
+        </div>
       </div>
 
-      <button onClick={onStartReview} disabled={lesson.cards.length < 2} className="w-full mb-5 rounded-md py-3 flex items-center justify-center gap-2 bg-[#16805d] text-[#ffffff] font-display font-bold text-lg shadow-md disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition">
+      <button onClick={onStartReview} disabled={lesson.cards.length < 1} className="w-full mb-5 rounded-md py-3 flex items-center justify-center gap-2 bg-[#16805d] text-[#ffffff] font-display font-bold text-lg shadow-md disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition">
         <Play size={20} /> 復習をはじめる
       </button>
-      {lesson.cards.length < 2 && <p className="text-xs text-[#1687a7] -mt-3 mb-4">復習を始めるにはカードが2枚以上必要です</p>}
+      {lesson.cards.length < 1 && <p className="text-xs text-[#1687a7] -mt-3 mb-4">復習を始めるにはカードが必要です</p>}
 
       <div className="space-y-2 mb-4">
         {lesson.cards.map((c) => (
@@ -882,28 +880,9 @@ function LessonDetail({ lesson, isEditor, progress, onEnsureProgress, onBack, on
               )}
             </div>
             <MasteryDots level={(prog[c.id] || emptyProgress()).level} />
-            {isEditor && (
-              <>
-                <button onClick={() => setEditingCard(c)} className="text-[#42677a] hover:text-[#16475f]" aria-label="編集"><Pencil size={15} /></button>
-                <button onClick={() => onDeleteCard(c.id)} className="text-[#b42335] hover:text-[#b42335]" aria-label="削除"><Trash2 size={15} /></button>
-              </>
-            )}
           </div>
         ))}
       </div>
-
-      {isEditor &&
-        (showCardForm || editingCard ? (
-          <CardForm
-            initial={editingCard}
-            onCancel={() => { setShowCardForm(false); setEditingCard(null); }}
-            onSave={(card) => { onUpsertCard(card); setShowCardForm(false); setEditingCard(null); }}
-          />
-        ) : (
-          <button onClick={() => setShowCardForm(true)} className="w-full rounded-md p-3 flex items-center justify-center gap-2 border-2 border-dashed border-[#73bfd7] text-[#1687a7] hover:text-[#16475f] hover:border-[#1687a7] hover:bg-[#e8f7fb] transition">
-            <Plus size={16} /> カードを手動で追加
-          </button>
-        ))}
     </div>
   );
 }
@@ -912,100 +891,6 @@ function MasteryDots({ level }) {
   return (
     <div className="hidden sm:flex gap-0.5 mr-1" aria-label={`習熟度 ${level}/5`}>
       {[0, 1, 2, 3, 4].map((i) => <div key={i} className={`w-1.5 h-1.5 rounded-full ${i < level ? "bg-[#16805d]" : "bg-[#b7d6e6]"}`} />)}
-    </div>
-  );
-}
-
-/* ---------------- Card Form (manual add, image = URL only) ---------------- */
-function CardForm({ initial, onCancel, onSave }) {
-  const [visualType, setVisualType] = useState(initial?.visualType || "emoji");
-  const [emoji, setEmoji] = useState(initial?.emoji || "");
-  const [photoUrl, setPhotoUrl] = useState(initial?.photoUrl || "");
-  const [audioUrl, setAudioUrl] = useState(initial?.audioUrl || "");
-  const [en, setEn] = useState(initial?.en || "");
-  const [note, setNote] = useState(initial?.note || "");
-  const [tab, setTab] = useState(Object.keys(EMOJI_BANK)[0]);
-  const normalizedPhotoUrl = normalizeImageUrl(photoUrl);
-  const normalizedAudioUrl = normalizeAudioUrl(audioUrl);
-
-  const canSave = en.trim() && ((visualType === "emoji" && emoji.trim()) || (visualType === "photo" && photoUrl.trim()));
-
-  const handleSave = () => {
-    onSave({
-      id: initial?.id || uid(),
-      en: en.trim(),
-      note: note.trim(),
-      visualType,
-      emoji: visualType === "emoji" ? emoji.trim() : "",
-      photoUrl: visualType === "photo" ? normalizedPhotoUrl : undefined,
-      audioUrl: normalizedAudioUrl || undefined,
-    });
-  };
-
-  return (
-    <div className="card-paper rounded-md p-4 border border-[#b7d6e6] slide-up">
-      <div className="flex gap-1.5 mb-3">
-        <button onClick={() => setVisualType("emoji")} className={`flex-1 text-sm px-3 py-2 rounded flex items-center justify-center gap-1.5 font-medium ${visualType === "emoji" ? "bg-[#1687a7] text-[#ffffff]" : "bg-white/50 text-[#42677a]"}`}>
-          <Smile size={15} /> 絵文字
-        </button>
-        <button onClick={() => setVisualType("photo")} className={`flex-1 text-sm px-3 py-2 rounded flex items-center justify-center gap-1.5 font-medium ${visualType === "photo" ? "bg-[#1687a7] text-[#ffffff]" : "bg-white/50 text-[#42677a]"}`}>
-          <LinkIcon size={15} /> 画像URL
-        </button>
-      </div>
-
-      {visualType === "emoji" ? (
-        <>
-          <div className="flex gap-3 mb-3">
-            <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 4))} placeholder="🖼️" className="w-16 h-16 text-3xl text-center rounded border border-[#b7d6e6] bg-white/60" aria-label="絵（絵文字）" />
-            <EnNoteInputs en={en} setEn={setEn} note={note} setNote={setNote} />
-          </div>
-          <div className="mb-3">
-            <div className="flex flex-wrap gap-1 mb-2">
-              {Object.keys(EMOJI_BANK).map((k) => (
-                <button key={k} onClick={() => setTab(k)} className={`text-xs px-2 py-1 rounded font-mono ${tab === k ? "bg-[#1687a7] text-[#ffffff]" : "bg-white/50 text-[#42677a]"}`}>{k}</button>
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {EMOJI_BANK[tab].map((em) => (
-                <button key={em} onClick={() => setEmoji(em)} className="text-xl w-9 h-9 flex items-center justify-center rounded hover:bg-white/60 bg-white/30">{em}</button>
-              ))}
-            </div>
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="flex gap-3 mb-3">
-            <div className="w-16 h-16 rounded border border-[#b7d6e6] bg-white/60 flex items-center justify-center overflow-hidden shrink-0">
-              {normalizedPhotoUrl ? (
-                <img src={normalizedPhotoUrl} alt="" className="w-16 h-16 object-cover" onError={(e) => (e.currentTarget.style.display = "none")} />
-              ) : (
-                <ImageOff className="text-[#6b8794]" size={20} />
-              )}
-            </div>
-            <EnNoteInputs en={en} setEn={setEn} note={note} setNote={setNote} />
-          </div>
-          <input value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} placeholder="https://example.com/apple.jpg" className="w-full rounded border border-[#b7d6e6] bg-white/60 px-3 py-2 text-sm mb-1" />
-          <p className="text-[10px] text-[#6b8794] mb-2">画像はどこかにアップロード済みのものへのリンクを貼ってください。多くの場合はスプレッドシート連携でまとめて登録する方が簡単です。</p>
-        </>
-      )}
-
-      <div className="mb-2">
-        <input value={audioUrl} onChange={(e) => setAudioUrl(e.target.value)} placeholder="音声URL（任意）" className="w-full rounded border border-[#b7d6e6] bg-white/60 px-3 py-2 text-sm" />
-      </div>
-
-      <div className="flex gap-2 justify-end mt-2">
-        <button onClick={onCancel} className="px-3 py-1.5 text-sm text-[#42677a]">キャンセル</button>
-        <button disabled={!canSave} onClick={handleSave} className="px-4 py-1.5 text-sm rounded bg-[#1687a7] text-[#ffffff] disabled:opacity-40">{initial ? "更新" : "追加"}</button>
-      </div>
-    </div>
-  );
-}
-
-function EnNoteInputs({ en, setEn, note, setNote }) {
-  return (
-    <div className="flex-1 flex flex-col gap-2">
-      <input value={en} onChange={(e) => setEn(e.target.value)} placeholder="This is a book." className="rounded border border-[#b7d6e6] bg-white/60 px-3 py-2 font-display text-[#16475f]" autoFocus />
-      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="メモ（任意・出題には使われません）" className="rounded border border-[#b7d6e6] bg-white/40 px-3 py-1.5 text-sm text-[#42677a]" />
     </div>
   );
 }
@@ -1083,7 +968,7 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
       <div className="card-paper rounded-md border border-[#b7d6e6] p-6 mb-5 text-center relative">
         <div className="punch-hole absolute -top-2 left-1/2 -translate-x-1/2" />
         {q.type === "worksheet" ? (
-          <WorksheetQuestion card={q.card} selected={selected} onSubmit={(isCorrect) => recordAnswer(isCorrect)} />
+          <WorksheetQuestion key={q.card.id} card={q.card} selected={selected} onSubmit={(isCorrect) => recordAnswer(isCorrect)} />
         ) : q.type === "pic2en" ? (
           <div className="flex items-center justify-center min-h-[110px]">
             <CardVisual card={q.card} className="max-h-32 max-w-[220px] object-contain rounded text-7xl" iconSize={64} />
