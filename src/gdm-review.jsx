@@ -896,14 +896,8 @@ function MasteryDots({ level }) {
 }
 
 /* ---------------- Review Session ---------------- */
-function buildQueue(lesson, progress) {
-  const now = Date.now();
-  const getProg = (c) => progress[c.id] || emptyProgress();
-  const due = lesson.cards.filter((c) => (getProg(c).dueAt || 0) <= now);
-  const pool = due.length > 0 ? due : [...lesson.cards].sort((a, b) => (getProg(a).lastReview || 0) - (getProg(b).lastReview || 0));
-  const size = Math.min(10, Math.max(pool.length, Math.min(5, lesson.cards.length)));
-  const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, size);
-  return shuffled.length > 0 ? shuffled : [...lesson.cards].sort(() => Math.random() - 0.5).slice(0, Math.min(10, lesson.cards.length));
+function buildQueue(lesson) {
+  return [...lesson.cards];
 }
 function makeQuestion(card, allCards) {
   if (card.worksheetLines?.length) return { card, type: "worksheet", choices: [] };
@@ -918,7 +912,7 @@ function cardLabel(card) {
 }
 
 function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) {
-  const queue = useRef(buildQueue(lesson, initialProgress));
+  const queue = useRef(buildQueue(lesson));
   const [qIndex, setQIndex] = useState(0);
   const [question, setQuestion] = useState(() => makeQuestion(queue.current[0], allCards));
   const [selected, setSelected] = useState(null);
