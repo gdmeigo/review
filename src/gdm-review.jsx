@@ -622,17 +622,57 @@ function CardVisual({ card, className, iconSize = 18 }) {
 }
 
 function AudioButton({ src, label = "音声" }) {
+  const audioRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, []);
+
   if (!src) return null;
+
+  const handlePlay = async () => {
+    setHasError(false);
+    if (!audioRef.current || audioRef.current.src !== src) {
+      if (audioRef.current) audioRef.current.pause();
+      audioRef.current = new Audio(src);
+      audioRef.current.addEventListener("ended", () => setIsPlaying(false));
+      audioRef.current.addEventListener("pause", () => setIsPlaying(false));
+      audioRef.current.addEventListener("play", () => setIsPlaying(true));
+      audioRef.current.addEventListener("error", () => {
+        setIsPlaying(false);
+        setHasError(true);
+      });
+    }
+
+    try {
+      if (isPlaying) {
+        audioRef.current.pause();
+      } else {
+        await audioRef.current.play();
+      }
+    } catch {
+      setIsPlaying(false);
+      setHasError(true);
+    }
+  };
+
   return (
-    <a
-      href={src}
-      target="_blank"
-      rel="noreferrer"
+    <button
+      type="button"
+      onClick={handlePlay}
       className="inline-flex items-center gap-1 rounded border border-[#73bfd7] px-2 py-1 text-[11px] text-[#166078] hover:bg-[#e8f7fb]"
+      title={hasError ? "音声を再生できませんでした" : label}
     >
       <Volume2 size={13} />
-      {label}
-    </a>
+      {hasError ? "再生不可" : isPlaying ? "停止" : label}
+    </button>
   );
 }
 
