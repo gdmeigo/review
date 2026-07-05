@@ -68,7 +68,7 @@ function normalizeSheetUrl(url) {
   const trimmed = (url || "").trim();
   const driveFileId = getGoogleDriveFileId(trimmed);
   if (driveFileId) {
-    return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(driveFileId)}`;
+    return `https://drive.usercontent.google.com/download?id=${encodeURIComponent(driveFileId)}&export=download`;
   }
 
   return trimmed;
