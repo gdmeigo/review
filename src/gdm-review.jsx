@@ -535,7 +535,6 @@ function TopBar({ screen, setScreen, xp, streak }) {
 function Home({ index, onImportRows, onOpen }) {
   return (
     <div className="pt-6">
-      <p className="font-display italic text-[#1687a7] mb-2 text-[15px]">Look at the picture. Say it in English.</p>
       <p className="text-[11px] text-[#42677a] mb-5 font-mono">レッスン内容は共有されます。復習の記録(習熟度・XP)は自分だけに保存されます。</p>
 
       {index.length === 0 && (
