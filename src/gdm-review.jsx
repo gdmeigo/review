@@ -31,6 +31,7 @@ const DRIVE_IMAGE_SIZE = "w1000";
 const DEFAULT_EXCEL_URL = `${import.meta.env.BASE_URL}review.xlsx`;
 const DEFAULT_SHEET_DOWNLOAD_URL = DEFAULT_EXCEL_URL;
 const CONTENT_IMPORTED_KEY = "content-imported";
+const CONTENT_VERSION = "2026-07-05-lesson-numbers";
 
 function getGoogleDriveFileId(url) {
   try {
@@ -86,6 +87,7 @@ function normalizeSheetUrl(url) {
 
 /* ---------------- spreadsheet import helpers ---------------- */
 const FIELD_ALIASES = {
+  lessonNo: ["lesson_no", "lessonno", "lesson_number", "レッスン番号"],
   lesson: ["lesson", "レッスン", "レッスン名", "unit", "ユニット"],
   item: ["item", "no", "number", "question", "worksheet", "work", "問題", "番号", "項目"],
   emoji: ["emoji", "絵文字"],
@@ -154,24 +156,29 @@ function parseClozeSentence(value, answerValue) {
   parts.push(raw.slice(lastIndex));
   const explicitAnswers = splitChoices(answerValue);
   if (answers.length === 0 && explicitAnswers.length > 0 && /_{2,}/.test(raw)) {
+    const clozeParts = raw.split(/_{2,}/);
     return {
       sentence: raw,
-      clozeParts: raw.split(/_{2,}/),
+      clozeParts,
       answers: explicitAnswers,
+      blankCount: clozeParts.length - 1,
     };
   }
   if (answers.length === 0 && /_{2,}/.test(raw)) {
-    const blankCount = raw.split(/_{2,}/).length - 1;
+    const clozeParts = raw.split(/_{2,}/);
+    const blankCount = clozeParts.length - 1;
     return {
       sentence: raw,
-      clozeParts: raw.split(/_{2,}/),
+      clozeParts,
       answers: Array.from({ length: blankCount }, () => ""),
+      blankCount,
     };
   }
   return {
     sentence: answers.length > 0 ? parts.join("____") : raw,
     clozeParts: answers.length > 0 ? parts : null,
     answers: explicitAnswers.length > 0 ? explicitAnswers : answers,
+    blankCount: explicitAnswers.length > 0 ? explicitAnswers.length : answers.length,
   };
 }
 function isAnswerCorrect(expected, actual) {
@@ -189,15 +196,18 @@ function buildContentFromRows(rows) {
     const audioUrl = normalizeAudioUrl(getField(row, "audio"));
     if (!en && choices.length === 0 && !answer) return;
     const title = getField(row, "lesson") || "未分類";
+    const lessonNo = getField(row, "lessonNo");
     const item = getField(row, "item");
     const emoji = getField(row, "emoji");
     const image = normalizeImageUrl(getField(row, "image"));
     const note = getField(row, "note");
     if (!byTitle[title]) {
-      byTitle[title] = { title, emoji: emoji || "📇", cards: [], cardsByItem: {} };
+      byTitle[title] = { title, lessonNo, emoji: emoji || "📇", cards: [], cardsByItem: {} };
       order.push(title);
     } else if (emoji && byTitle[title].emoji === "📇") {
       byTitle[title].emoji = emoji;
+    } else if (lessonNo && !byTitle[title].lessonNo) {
+      byTitle[title].lessonNo = lessonNo;
     }
     const isWorksheetRow = !!(sentence || choices.length > 0 || answer || audioUrl || item);
     if (isWorksheetRow) {
@@ -217,6 +227,7 @@ function buildContentFromRows(rows) {
         clozeParts: cloze.clozeParts,
         choices,
         answers: cloze.answers,
+        blankCount: cloze.blankCount,
         audioUrl,
         note,
       });
@@ -252,8 +263,8 @@ function buildContentFromRows(rows) {
         emoji: c.image ? "" : c.emoji || "❓",
       };
     });
-    lessonsMap[lessonId] = { id: lessonId, title, emoji: l.emoji, cards };
-    index.push({ id: lessonId, title, emoji: l.emoji, count: cards.length });
+    lessonsMap[lessonId] = { id: lessonId, title, lessonNo: l.lessonNo, emoji: l.emoji, cards };
+    index.push({ id: lessonId, title, lessonNo: l.lessonNo, emoji: l.emoji, count: cards.length });
   });
   return { index, lessonsMap };
 }
@@ -330,7 +341,7 @@ export default function App() {
         if (raw) loaded[meta.id] = JSON.parse(raw);
       }
 
-      if (idx.length === 0 && !importedRaw) {
+      if (idx.length === 0 || importedRaw !== CONTENT_VERSION) {
         try {
           const response = await fetch(DEFAULT_EXCEL_URL, { cache: "no-cache" });
           if (!response.ok) throw new Error("Default Excel not found");
@@ -345,7 +356,7 @@ export default function App() {
               await safeSet("lesson:" + l.id, JSON.stringify(l), true);
             }
             await safeSet("lesson-index", JSON.stringify(defaultIndex), true);
-            await safeSet(CONTENT_IMPORTED_KEY, "true", true);
+            await safeSet(CONTENT_IMPORTED_KEY, CONTENT_VERSION, true);
             idx = defaultIndex;
             loaded = lessonsMap;
           }
@@ -353,7 +364,7 @@ export default function App() {
           // Keep the app usable; settings still allows manual import.
         }
       } else if (idx.length > 0 && !importedRaw) {
-        await safeSet(CONTENT_IMPORTED_KEY, "true", true);
+        await safeSet(CONTENT_IMPORTED_KEY, CONTENT_VERSION, true);
       }
 
       setIndex(idx);
@@ -397,7 +408,7 @@ export default function App() {
       await safeSet("lesson:" + l.id, JSON.stringify(l), true);
     }
     await safeSet("lesson-index", JSON.stringify(newIndex), true);
-    await safeSet(CONTENT_IMPORTED_KEY, "true", true);
+    await safeSet(CONTENT_IMPORTED_KEY, CONTENT_VERSION, true);
     setIndex(newIndex);
     setLessons(newLessons);
     return newIndex;
@@ -538,9 +549,41 @@ function TopBar({ screen, setScreen, xp, streak }) {
 
 /* ---------------- Home ---------------- */
 function Home({ index, perfectByLesson, onOpen }) {
+  const [jumpNo, setJumpNo] = useState("");
+  const openByNumber = () => {
+    const normalized = jumpNo.trim();
+    if (!normalized) return;
+    const found = index.find((meta, indexPosition) => String(meta.lessonNo || indexPosition + 1) === normalized);
+    if (found && (found.count || 0) > 0) onOpen(found.id);
+  };
+
   return (
     <div className="pt-6">
       <p className="text-[11px] text-[#42677a] mb-5 font-mono">復習の記録(習熟度・XP)は自分だけに保存されます。</p>
+
+      {index.length > 0 && (
+        <div className="mb-5 flex items-center gap-2 rounded-md border border-[#b7d6e6] bg-white/80 p-2 shadow-sm">
+          <input
+            type="number"
+            inputMode="numeric"
+            min="1"
+            value={jumpNo}
+            onChange={(event) => setJumpNo(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") openByNumber();
+            }}
+            placeholder="番号"
+            className="min-w-0 flex-1 rounded border border-[#b7d6e6] bg-white px-3 py-2 text-sm text-[#16475f] outline-none focus:border-[#1687a7]"
+          />
+          <button
+            type="button"
+            onClick={openByNumber}
+            className="shrink-0 rounded bg-[#1687a7] px-3 py-2 text-sm font-bold text-white hover:brightness-110"
+          >
+            ジャンプ
+          </button>
+        </div>
+      )}
 
       {index.length === 0 && (
         <div className="card-paper rounded-md p-6 text-center mb-4 border border-[#b7d6e6]">
@@ -552,7 +595,10 @@ function Home({ index, perfectByLesson, onOpen }) {
       <div className="space-y-3">
         {index.map((meta) => (
           <button key={meta.id} onClick={() => onOpen(meta.id)} disabled={(meta.count || 0) < 1} className="drawer-front w-full rounded-md p-4 flex items-center gap-4 text-left shadow-md hover:brightness-110 transition disabled:opacity-50 disabled:cursor-not-allowed">
-            <div className="brass rounded w-12 h-12 flex items-center justify-center text-2xl shrink-0">{meta.emoji || "📇"}</div>
+            <div className="brass rounded w-12 h-12 flex flex-col items-center justify-center shrink-0">
+              <span className="font-mono text-[11px] font-bold leading-none text-[#16475f]">{meta.lessonNo || "?"}</span>
+              <span className="text-lg leading-none">{meta.emoji || "📇"}</span>
+            </div>
             <div className="flex-1 min-w-0">
               <div className="font-display text-[#16475f] text-lg font-semibold truncate">{meta.title}</div>
               <div className="font-mono text-xs text-[#42677a]">{meta.count || 0} 枚のカード</div>
@@ -599,10 +645,10 @@ function SettingsScreen({ onImportRows }) {
 function SheetSyncPanel({ onImportRows }) {
   const [status, setStatus] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
-  const csvExample = `lesson,item,image,sentence,choices,answer,audio,note
-WorkP22,1,https://example.com/picture1.png,This is a {{man}}.,man|woman,,https://example.com/audio1.mp3,{{ }} の中が空欄になります
-WorkP22,1,https://example.com/picture1.png,Her {{book}} is on the {{table}}.,book|bag|table|desk,,,
-WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,____ を使う場合は answer に正解を書きます`;
+  const csvExample = `lesson_no,lesson,item,image,sentence,choices,answer,audio,note
+1,WorkP22,1,https://example.com/picture1.png,This is a {{man}}.,man|woman,,https://example.com/audio1.mp3,{{ }} の中が空欄になります
+1,WorkP22,1,https://example.com/picture1.png,Her {{book}} is on the {{table}}.,book|bag|table|desk,,,
+1,WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,____ を使う場合は answer に正解を書きます`;
 
   const doFileImport = async (file) => {
     if (!file) return;
@@ -625,7 +671,7 @@ WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,_
       </div>
       <p className="text-xs text-[#42677a] mb-3">
         CSVまたはExcelファイルからワークシートを読み込めます。列は
-        <span className="font-mono"> lesson / item / image / sentence / choices / answer / audio / note </span>
+        <span className="font-mono"> lesson_no / lesson / item / image / sentence / choices / answer / audio / note </span>
         を使えます。image、audioにはGoogle Driveに配置した画像と音声をURLで指定してください。Google Driveの上位フォルダ設定はリンクを知っている人が閲覧できる設定にしてください。
       </p>
       <button onClick={() => setShowHelp((s) => !s)} className="text-xs text-[#1687a7] underline mb-3">
@@ -816,8 +862,10 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
     () => lines.map((line) => shuffleList(line.choices || [])),
     [card.id, lines]
   );
+  const getBlankCount = (line) => line.blankCount ?? (line.answers || []).length ?? Math.max((line.clozeParts || []).length - 1, 0);
+  const blankIndexes = (line) => Array.from({ length: getBlankCount(line) }, (_, index) => index);
   const allFilled = lines.every((line, lineIndex) =>
-    (line.answers || []).every((_, blankIndex) => fills[`${lineIndex}-${blankIndex}`])
+    blankIndexes(line).every((blankIndex) => fills[`${lineIndex}-${blankIndex}`])
   );
 
   const setBlank = (lineIndex, blankIndex, choice) => {
@@ -827,7 +875,7 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
 
   const isCorrect = () =>
     lines.every((line, lineIndex) =>
-      (line.answers || []).every((answer, blankIndex) => isAnswerCorrect(answer, fills[`${lineIndex}-${blankIndex}`]))
+      blankIndexes(line).every((blankIndex) => isAnswerCorrect((line.answers || [])[blankIndex], fills[`${lineIndex}-${blankIndex}`]))
     );
 
   return (
@@ -844,8 +892,8 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
               {(line.clozeParts || [line.sentence || ""]).map((part, partIndex) => (
                 <span key={partIndex}>
                   {part}
-                  {partIndex < (line.answers || []).length && (
-                    <span className={`mx-1 inline-flex min-w-20 items-center justify-center border-b-2 px-2 ${selected ? isAnswerCorrect(line.answers[partIndex], fills[`${lineIndex}-${partIndex}`]) ? "border-[#16805d] text-[#16805d]" : "border-[#b42335] text-[#b42335]" : "border-[#1687a7] text-[#16475f]"}`}>
+                  {partIndex < getBlankCount(line) && (
+                    <span className={`mx-1 inline-flex min-w-20 items-center justify-center border-b-2 px-2 ${selected ? isAnswerCorrect((line.answers || [])[partIndex], fills[`${lineIndex}-${partIndex}`]) ? "border-[#16805d] text-[#16805d]" : "border-[#b42335] text-[#b42335]" : "border-[#1687a7] text-[#16475f]"}`}>
                       {fills[`${lineIndex}-${partIndex}`] || " "}
                     </span>
                   )}
@@ -859,7 +907,7 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
                   type="button"
                   disabled={!!selected}
                   onClick={() => {
-                    const nextBlank = (line.answers || []).findIndex((_, blankIndex) => !fills[`${lineIndex}-${blankIndex}`]);
+                    const nextBlank = blankIndexes(line).find((blankIndex) => !fills[`${lineIndex}-${blankIndex}`]);
                     if (nextBlank >= 0) setBlank(lineIndex, nextBlank, choice);
                   }}
                   className="rounded border border-[#b7d6e6] bg-white px-2 py-1 text-xs text-[#166078] hover:bg-[#e8f7fb] disabled:opacity-70"
@@ -867,12 +915,12 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
                   {choice}
                 </button>
               ))}
-              {(line.answers || []).some((_, blankIndex) => fills[`${lineIndex}-${blankIndex}`]) && !selected && (
+              {blankIndexes(line).some((blankIndex) => fills[`${lineIndex}-${blankIndex}`]) && !selected && (
                 <button
                   type="button"
                   onClick={() => setFills((prev) => {
                     const next = { ...prev };
-                    (line.answers || []).forEach((_, blankIndex) => delete next[`${lineIndex}-${blankIndex}`]);
+                    blankIndexes(line).forEach((blankIndex) => delete next[`${lineIndex}-${blankIndex}`]);
                     return next;
                   })}
                   className="rounded px-2 py-1 text-xs text-[#42677a] underline"
