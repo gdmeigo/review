@@ -494,7 +494,7 @@ function TopBar({ screen, setScreen, xp, streak }) {
 function Home({ index, onOpen }) {
   return (
     <div className="pt-6">
-      <p className="text-[11px] text-[#42677a] mb-5 font-mono">レッスン内容は共有されます。復習の記録(習熟度・XP)は自分だけに保存されます。</p>
+      <p className="text-[11px] text-[#42677a] mb-5 font-mono">復習の記録(習熟度・XP)は自分だけに保存されます。</p>
 
       {index.length === 0 && (
         <div className="card-paper rounded-md p-6 text-center mb-4 border border-[#b7d6e6]">
