@@ -28,10 +28,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const emptyProgress = () => ({ level: 0, dueAt: 0, lastReview: 0 });
 const DRIVE_IMAGE_SIZE = "w1000";
-const DEFAULT_EXCEL_URL = `${import.meta.env.BASE_URL}review.xlsx`;
+const DEFAULT_EXCEL_URL = "https://raw.githubusercontent.com/gdmeigo/review/main/review.xlsx";
 const DEFAULT_SHEET_DOWNLOAD_URL = DEFAULT_EXCEL_URL;
 const CONTENT_IMPORTED_KEY = "content-imported";
-const CONTENT_VERSION = "2026-07-05-lesson-numbers";
+const CONTENT_VERSION = "2026-07-05-github-raw-default";
 
 function getGoogleDriveFileId(url) {
   try {
