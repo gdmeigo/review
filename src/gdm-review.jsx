@@ -593,10 +593,10 @@ function Home({ index, perfectByLesson, onOpen }) {
       )}
 
       <div className="space-y-3">
-        {index.map((meta) => (
+        {index.map((meta, indexPosition) => (
           <button key={meta.id} onClick={() => onOpen(meta.id)} disabled={(meta.count || 0) < 1} className="drawer-front w-full rounded-md p-4 flex items-center gap-4 text-left shadow-md hover:brightness-110 transition disabled:opacity-50 disabled:cursor-not-allowed">
             <div className="brass rounded w-12 h-12 flex flex-col items-center justify-center shrink-0">
-              <span className="font-mono text-[11px] font-bold leading-none text-[#16475f]">{meta.lessonNo || "?"}</span>
+              <span className="font-mono text-[11px] font-bold leading-none text-[#16475f]">{meta.lessonNo || indexPosition + 1}</span>
               <span className="text-lg leading-none">{meta.emoji || "📇"}</span>
             </div>
             <div className="flex-1 min-w-0">
