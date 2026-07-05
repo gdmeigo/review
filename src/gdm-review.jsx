@@ -39,7 +39,7 @@ function getGoogleDriveFileId(url) {
       const directMatch = parsed.pathname.match(/^\/d\/([^/=]+)/);
       return directMatch ? directMatch[1] : "";
     }
-    if (host !== "drive.google.com" && host !== "docs.google.com") return "";
+    if (host !== "drive.google.com" && host !== "docs.google.com" && host !== "drive.usercontent.google.com") return "";
 
     const fileMatch = parsed.pathname.match(/\/file\/d\/([^/]+)/);
     if (fileMatch) return fileMatch[1];
@@ -119,7 +119,11 @@ function slugify(str) {
 function normalizeAudioUrl(url) {
   const trimmed = (url || "").trim();
   if (!trimmed) return "";
-  return getGoogleDriveFileId(trimmed) ? normalizeSheetUrl(trimmed) : trimmed;
+  const driveFileId = getGoogleDriveFileId(trimmed);
+  if (driveFileId) {
+    return `https://docs.google.com/uc?export=open&id=${encodeURIComponent(driveFileId)}`;
+  }
+  return trimmed;
 }
 function splitChoices(value) {
   return (value || "")
@@ -625,6 +629,7 @@ function AudioButton({ src, label = "音声" }) {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const playableSrc = normalizeAudioUrl(src);
 
   useEffect(() => {
     return () => {
@@ -635,13 +640,13 @@ function AudioButton({ src, label = "音声" }) {
     };
   }, []);
 
-  if (!src) return null;
+  if (!playableSrc) return null;
 
   const handlePlay = async () => {
     setHasError(false);
-    if (!audioRef.current || audioRef.current.src !== src) {
+    if (!audioRef.current || audioRef.current.src !== playableSrc) {
       if (audioRef.current) audioRef.current.pause();
-      audioRef.current = new Audio(src);
+      audioRef.current = new Audio(playableSrc);
       audioRef.current.addEventListener("ended", () => setIsPlaying(false));
       audioRef.current.addEventListener("pause", () => setIsPlaying(false));
       audioRef.current.addEventListener("play", () => setIsPlaying(true));
@@ -831,10 +836,10 @@ function LessonDetail({ lesson, progress, onEnsureProgress, onBack, onStartRevie
         </div>
       </div>
 
-      <button onClick={onStartReview} disabled={lesson.cards.length < 2} className="w-full mb-5 rounded-md py-3 flex items-center justify-center gap-2 bg-[#16805d] text-[#ffffff] font-display font-bold text-lg shadow-md disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition">
+      <button onClick={onStartReview} disabled={lesson.cards.length < 1} className="w-full mb-5 rounded-md py-3 flex items-center justify-center gap-2 bg-[#16805d] text-[#ffffff] font-display font-bold text-lg shadow-md disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition">
         <Play size={20} /> 復習をはじめる
       </button>
-      {lesson.cards.length < 2 && <p className="text-xs text-[#1687a7] -mt-3 mb-4">復習を始めるにはカードが2枚以上必要です</p>}
+      {lesson.cards.length < 1 && <p className="text-xs text-[#1687a7] -mt-3 mb-4">復習を始めるにはカードが必要です</p>}
 
       <div className="space-y-2 mb-4">
         {lesson.cards.map((c) => (
