@@ -4,8 +4,8 @@ import * as XLSX from "xlsx";
 import {
   Plus, Trash2, Pencil, ArrowLeft, Check, X, Play,
   Flame, Star, ChevronRight, BookOpen, Loader2, RotateCcw,
-  Home as HomeIcon, Lock, Unlock, KeyRound, Smile, ImageOff,
-  FileSpreadsheet, RefreshCw, Link as LinkIcon
+  Home as HomeIcon, Settings, Smile, ImageOff,
+  FileSpreadsheet, Link as LinkIcon
 } from "lucide-react";
 
 /* ---------------------------------------------------------
@@ -16,10 +16,8 @@ import {
 
    Content (lessons & cards) is SHARED across everyone using
    this artifact. Each person's own review progress and XP
-   stay PRIVATE to them. Editing requires the teacher
-   passphrase. The teacher can either add cards by hand, or
-   paste a link to a published Google Sheet / Excel CSV and
-   sync — images are just URLs typed into a spreadsheet
+   stay PRIVATE to them. Settings can add cards by hand or
+   import a CSV / Excel file — images are just URLs typed into a spreadsheet
    column, no upload needed.
 --------------------------------------------------------- */
 
@@ -31,6 +29,8 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const emptyProgress = () => ({ level: 0, dueAt: 0, lastReview: 0 });
 const DRIVE_IMAGE_SIZE = "w1000";
+const DEFAULT_SHEET_URL = "https://drive.google.com/file/d/117Tn1jy5gdE2GwzZ4_g7cawR05z8pfDE/view?usp=drive_link";
+const DEFAULT_SHEET_DOWNLOAD_URL = normalizeSheetUrl(DEFAULT_SHEET_URL);
 
 function getGoogleDriveFileId(url) {
   try {
@@ -189,33 +189,13 @@ function parseSheetBuffer(buffer, sourceName = "", contentType = "") {
   return parsed.data;
 }
 
-async function fetchAndParseSheet(url) {
-  const fetchUrl = normalizeSheetUrl(url);
-  const res = await fetch(fetchUrl, { mode: "cors" });
-  if (!res.ok) throw new Error("http " + res.status);
-
-  const buf = await res.arrayBuffer();
-  return parseSheetBuffer(buf, url, res.headers.get("content-type") || "");
-}
-
 export default function App() {
   const [ready, setReady] = useState(false);
   const [lessons, setLessons] = useState({});
   const [index, setIndex] = useState([]);
   const [stats, setStats] = useState({ xp: 0, reviewDates: [] });
   const [progressByLesson, setProgressByLesson] = useState({});
-  const [adminPinExists, setAdminPinExists] = useState(false);
-  const [adminPinValue, setAdminPinValue] = useState(null);
-  const [isEditor, setIsEditor] = useState(false);
-  const [sheetUrl, setSheetUrl] = useState("");
   const [screen, setScreen] = useState({ name: "home" });
-  const [pinModal, setPinModal] = useState(null);
-  const [toast, setToast] = useState(null);
-
-  const showToast = useCallback((msg) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2600);
-  }, []);
 
   const safeGet = async (key, shared) => {
     try {
@@ -245,9 +225,6 @@ export default function App() {
       const idx = idxRaw ? JSON.parse(idxRaw) : [];
       const statsRaw = await safeGet("stats", false);
       const st = statsRaw ? JSON.parse(statsRaw) : { xp: 0, reviewDates: [] };
-      const editorRaw = await safeGet("is-editor", false);
-      const pinRaw = await safeGet("admin-pin", true);
-      const sheetRaw = await safeGet("sheet-url", true);
 
       const loaded = {};
       for (const meta of idx) {
@@ -257,10 +234,6 @@ export default function App() {
       setIndex(idx);
       setLessons(loaded);
       setStats(st);
-      setIsEditor(editorRaw === "true");
-      setAdminPinExists(!!pinRaw);
-      setAdminPinValue(pinRaw);
-      setSheetUrl(sheetRaw || "");
       setReady(true);
     })();
   }, []);
@@ -285,35 +258,6 @@ export default function App() {
     setProgressByLesson((prev) => ({ ...prev, [lessonId]: prog }));
     await safeSet("progress:" + lessonId, JSON.stringify(prog), false);
   }, []);
-
-  // ---- editor / PIN flow ----
-  const requestEditorAccess = () => setPinModal(adminPinExists ? "enter" : "setup");
-
-  const submitSetupPin = async (pin) => {
-    await safeSet("admin-pin", pin, true);
-    setAdminPinExists(true);
-    setAdminPinValue(pin);
-    await safeSet("is-editor", "true", false);
-    setIsEditor(true);
-    setPinModal(null);
-    showToast("合言葉を作成し、編集モードにしました");
-  };
-  const submitEnterPin = async (pin) => {
-    const current = adminPinValue ?? (await safeGet("admin-pin", true));
-    if (pin === current) {
-      await safeSet("is-editor", "true", false);
-      setIsEditor(true);
-      setPinModal(null);
-      showToast("編集モードにしました");
-    } else {
-      showToast("合言葉が違います");
-    }
-  };
-  const exitEditorMode = async () => {
-    await safeSet("is-editor", "false", false);
-    setIsEditor(false);
-    showToast("編集モードを終了しました");
-  };
 
   // ---- manual lesson / card mutations ----
   const createLesson = async (title, emoji) => {
@@ -369,10 +313,6 @@ export default function App() {
   };
 
   // ---- spreadsheet sync ----
-  const saveSheetUrl = async (url) => {
-    setSheetUrl(url);
-    await safeSet("sheet-url", url, true);
-  };
   const importRows = async (rows) => {
     const { index: newIndex, lessonsMap: newLessons } = buildContentFromRows(rows);
     if (newIndex.length === 0) {
@@ -388,10 +328,6 @@ export default function App() {
     setIndex(newIndex);
     setLessons(newLessons);
     return newIndex;
-  };
-  const syncFromSheet = async (url) => {
-    const rows = await fetchAndParseSheet(url);
-    return importRows(rows);
   };
 
   const allCardsFlat = useMemo(
@@ -418,42 +354,38 @@ export default function App() {
         .font-display { font-family: 'Fraunces', serif; }
         .font-mono { font-family: 'IBM Plex Mono', monospace; }
         .cabinet-bg {
-          background-color: #2E2117;
+          background-color: #f7fcff;
           background-image:
-            repeating-linear-gradient(90deg, rgba(0,0,0,0.12) 0px, rgba(0,0,0,0.12) 2px, transparent 2px, transparent 90px),
-            linear-gradient(180deg, #3B2A1C 0%, #2A1D13 100%);
+            radial-gradient(circle at 20% 10%, rgba(115,191,215,0.18), transparent 28%),
+            linear-gradient(180deg, #ffffff 0%, #edf9fc 55%, #f7fcff 100%);
         }
         .card-paper {
-          background: #F3ECDA;
-          background-image: radial-gradient(rgba(0,0,0,0.035) 1px, transparent 1px);
+          background: rgba(255,255,255,0.92);
+          background-image: radial-gradient(rgba(22,135,167,0.06) 1px, transparent 1px);
           background-size: 6px 6px;
         }
-        .punch-hole { width: 14px; height: 14px; border-radius: 50%; background: #2E2117; box-shadow: inset 0 2px 3px rgba(0,0,0,0.6); }
-        .drawer-front { background: linear-gradient(180deg, #6B4A31 0%, #57381F 100%); border: 1px solid #402A17; }
-        .brass { background: linear-gradient(180deg, #E3B355 0%, #B9853A 100%); border: 1px solid #8C6425; }
+        .punch-hole { width: 14px; height: 14px; border-radius: 50%; background: #d7eef6; box-shadow: inset 0 1px 2px rgba(22,71,95,0.22); }
+        .drawer-front { background: linear-gradient(180deg, #ffffff 0%, #e8f7fb 100%); border: 1px solid #b7d6e6; }
+        .brass { background: linear-gradient(180deg, #d7f5eb 0%, #9fe3d1 100%); border: 1px solid #73cdb9; }
         @keyframes stampIn { 0% { transform: scale(2.2) rotate(-12deg); opacity: 0; } 60% { transform: scale(0.95) rotate(-12deg); opacity: 1; } 100% { transform: scale(1) rotate(-12deg); opacity: 1; } }
         .stamp { animation: stampIn 0.35s ease-out; }
         @keyframes slideUp { from { transform: translateY(14px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
         .slide-up { animation: slideUp 0.28s ease-out; }
         @media (prefers-reduced-motion: reduce) { .stamp, .slide-up { animation: none; } }
-        button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid #E3B355; outline-offset: 2px; }
+        button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid #73bfd7; outline-offset: 2px; }
       `}</style>
 
       {!ready ? (
         <div className="cabinet-bg min-h-screen flex items-center justify-center">
-          <Loader2 className="animate-spin text-[#E3B355]" size={32} />
+          <Loader2 className="animate-spin text-[#73bfd7]" size={32} />
         </div>
       ) : (
         <div className="cabinet-bg min-h-screen">
-          <TopBar screen={screen} setScreen={setScreen} xp={stats.xp} streak={streak} isEditor={isEditor} onRequestEditor={requestEditorAccess} onExitEditor={exitEditorMode} />
+          <TopBar screen={screen} setScreen={setScreen} xp={stats.xp} streak={streak} />
           <div className="max-w-2xl mx-auto px-4 pb-16">
             {screen.name === "home" && (
               <Home
                 index={index}
-                isEditor={isEditor}
-                sheetUrl={sheetUrl}
-                onSaveSheetUrl={saveSheetUrl}
-                onSyncSheet={syncFromSheet}
                 onImportRows={importRows}
                 onOpen={(id) => setScreen({ name: "lesson", id })}
                 onCreate={async (title, emoji) => {
@@ -465,7 +397,7 @@ export default function App() {
             {screen.name === "lesson" && lessons[screen.id] && (
               <LessonDetail
                 lesson={lessons[screen.id]}
-                isEditor={isEditor}
+                isEditor={true}
                 progress={progressByLesson[screen.id]}
                 onEnsureProgress={() => loadProgress(screen.id)}
                 onBack={() => setScreen({ name: "home" })}
@@ -503,38 +435,28 @@ export default function App() {
           </div>
         </div>
       )}
-
-      {pinModal && <PinModal mode={pinModal} onCancel={() => setPinModal(null)} onSubmitSetup={submitSetupPin} onSubmitEnter={submitEnterPin} />}
-
-      {toast && <div className="fixed bottom-5 left-1/2 -translate-x-1/2 bg-[#1F2A3C] text-[#F3ECDA] px-4 py-2 rounded-md text-sm font-medium shadow-lg z-50 slide-up">{toast}</div>}
     </div>
   );
 }
 
 /* ---------------- TopBar ---------------- */
-function TopBar({ screen, setScreen, xp, streak, isEditor, onRequestEditor, onExitEditor }) {
+function TopBar({ screen, setScreen, xp, streak }) {
   return (
-    <div className="sticky top-0 z-30 backdrop-blur-sm bg-[#2E2117]/90 border-b border-[#4a3520]">
+    <div className="sticky top-0 z-30 backdrop-blur-sm bg-white/90 border-b border-[#d7eef6]">
       <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
-        <button onClick={() => setScreen({ name: "home" })} className="flex items-center gap-2 text-[#F3ECDA] min-w-0">
+        <button onClick={() => setScreen({ name: "home" })} className="flex items-center gap-2 text-[#16475f] min-w-0">
           <span className="font-display text-lg font-bold tracking-tight truncate">GDM 復習カード</span>
         </button>
         <div className="flex items-center gap-3 font-mono text-sm shrink-0">
-          <div className="flex items-center gap-1 text-[#E3B355]"><Flame size={16} /> {streak}</div>
-          <div className="flex items-center gap-1 text-[#D9C79A]"><Star size={16} /> {xp}</div>
-          {isEditor ? (
-            <button onClick={onExitEditor} className="flex items-center gap-1 text-[10px] bg-[#2F6B4F] text-[#F3ECDA] px-2 py-1 rounded" title="編集モードを終了">
-              <Unlock size={12} /> 編集中
-            </button>
-          ) : (
-            <button onClick={onRequestEditor} className="flex items-center gap-1 text-[10px] bg-[#5a4a30] text-[#D9C79A] px-2 py-1 rounded hover:text-[#F3ECDA]" title="先生モードに入る">
-              <Lock size={12} /> 先生
-            </button>
-          )}
+          <div className="flex items-center gap-1 text-[#1687a7]"><Flame size={16} /> {streak}</div>
+          <div className="flex items-center gap-1 text-[#16805d]"><Star size={16} /> {xp}</div>
+          <button onClick={() => setScreen({ name: "home" })} className="flex items-center gap-1 text-[10px] bg-[#1687a7] text-white px-2 py-1 rounded" title="設定">
+            <Settings size={12} /> 設定
+          </button>
           {screen.name !== "home" && (
             <button
               onClick={() => setScreen(screen.name === "summary" ? { name: "home" } : screen.name === "review" ? { name: "lesson", id: screen.id } : { name: "home" })}
-              className="text-[#D9C79A] hover:text-[#F3ECDA]"
+              className="text-[#1687a7] hover:text-[#16475f]"
               aria-label="戻る"
             >
               <ArrowLeft size={18} />
@@ -546,59 +468,18 @@ function TopBar({ screen, setScreen, xp, streak, isEditor, onRequestEditor, onEx
   );
 }
 
-/* ---------------- PIN Modal ---------------- */
-function PinModal({ mode, onCancel, onSubmitSetup, onSubmitEnter }) {
-  const [pin, setPin] = useState("");
-  const [pin2, setPin2] = useState("");
-  const [error, setError] = useState("");
-  const handleSubmit = () => {
-    if (mode === "setup") {
-      if (pin.length < 4) return setError("4文字以上にしてください");
-      if (pin !== pin2) return setError("合言葉が一致しません");
-      onSubmitSetup(pin);
-    } else {
-      if (!pin) return;
-      onSubmitEnter(pin);
-    }
-  };
-  return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="card-paper rounded-md p-5 border border-[#c9bb9a] w-full max-w-sm slide-up">
-        <div className="flex items-center gap-2 mb-3 text-[#3B2A1C]">
-          <KeyRound size={18} />
-          <h3 className="font-display text-lg font-bold">{mode === "setup" ? "先生用の合言葉を作成" : "先生モードに入る"}</h3>
-        </div>
-        {mode === "setup" && (
-          <p className="text-xs text-[#6b5d44] mb-3">
-            まだ合言葉が設定されていません。ここで決めた合言葉を知っている人だけがレッスン内容を編集できます。（簡易的な仕組みのため、厳密なセキュリティではありません）
-          </p>
-        )}
-        <input type="password" value={pin} onChange={(e) => { setPin(e.target.value); setError(""); }} placeholder="合言葉" autoFocus className="w-full rounded border border-[#c9bb9a] bg-white/70 px-3 py-2 mb-2 font-mono" />
-        {mode === "setup" && (
-          <input type="password" value={pin2} onChange={(e) => { setPin2(e.target.value); setError(""); }} placeholder="もう一度入力" className="w-full rounded border border-[#c9bb9a] bg-white/70 px-3 py-2 mb-2 font-mono" />
-        )}
-        {error && <p className="text-xs text-[#a3402f] mb-2">{error}</p>}
-        <div className="flex gap-2 justify-end mt-2">
-          <button onClick={onCancel} className="px-3 py-1.5 text-sm text-[#6b5d44]">キャンセル</button>
-          <button onClick={handleSubmit} className="px-4 py-1.5 text-sm rounded bg-[#1F2A3C] text-[#F3ECDA]">{mode === "setup" ? "作成して編集モードへ" : "入る"}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ---------------- Home ---------------- */
-function Home({ index, isEditor, sheetUrl, onSaveSheetUrl, onSyncSheet, onImportRows, onOpen, onCreate }) {
+function Home({ index, onImportRows, onOpen, onCreate }) {
   const [showAdd, setShowAdd] = useState(false);
   return (
     <div className="pt-6">
-      <p className="font-display italic text-[#D9C79A] mb-2 text-[15px]">Look at the picture. Say it in English.</p>
-      <p className="text-[11px] text-[#8a7a5c] mb-5 font-mono">レッスン内容はクラス全員で共有されます。復習の記録(習熟度・XP)は自分だけに保存されます。</p>
+      <p className="font-display italic text-[#1687a7] mb-2 text-[15px]">Look at the picture. Say it in English.</p>
+      <p className="text-[11px] text-[#42677a] mb-5 font-mono">レッスン内容は共有されます。復習の記録(習熟度・XP)は自分だけに保存されます。</p>
 
       {index.length === 0 && !showAdd && (
-        <div className="card-paper rounded-md p-6 text-center mb-4 border border-[#c9bb9a]">
-          <p className="font-display text-lg text-[#3B2A1C] mb-1">まだレッスンがありません</p>
-          <p className="text-sm text-[#6b5d44]">{isEditor ? "下のスプレッドシート連携、または手動追加で作りましょう" : "先生がレッスンを追加するまでお待ちください"}</p>
+        <div className="card-paper rounded-md p-6 text-center mb-4 border border-[#b7d6e6]">
+          <p className="font-display text-lg text-[#16475f] mb-1">まだレッスンがありません</p>
+          <p className="text-sm text-[#42677a]">下の設定からCSV/Excelを読み込むか、手動で追加できます</p>
         </div>
       )}
 
@@ -607,26 +488,22 @@ function Home({ index, isEditor, sheetUrl, onSaveSheetUrl, onSyncSheet, onImport
           <button key={meta.id} onClick={() => onOpen(meta.id)} className="drawer-front w-full rounded-md p-4 flex items-center gap-4 text-left shadow-md hover:brightness-110 transition">
             <div className="brass rounded w-12 h-12 flex items-center justify-center text-2xl shrink-0">{meta.emoji || "📇"}</div>
             <div className="flex-1 min-w-0">
-              <div className="font-display text-[#F3ECDA] text-lg font-semibold truncate">{meta.title}</div>
-              <div className="font-mono text-xs text-[#D9C79A]">{meta.count || 0} 枚のカード</div>
+              <div className="font-display text-[#16475f] text-lg font-semibold truncate">{meta.title}</div>
+              <div className="font-mono text-xs text-[#42677a]">{meta.count || 0} 枚のカード</div>
             </div>
-            <ChevronRight className="text-[#D9C79A]" size={20} />
+            <ChevronRight className="text-[#1687a7]" size={20} />
           </button>
         ))}
       </div>
 
-      {isEditor && (
-        <>
-          {showAdd ? (
-            <AddLessonForm onCancel={() => setShowAdd(false)} onCreate={(t, e) => { onCreate(t, e); setShowAdd(false); }} />
-          ) : (
-            <button onClick={() => setShowAdd(true)} className="mt-4 w-full rounded-md p-4 flex items-center justify-center gap-2 border-2 border-dashed border-[#6b5d44] text-[#D9C79A] hover:text-[#F3ECDA] hover:border-[#E3B355] transition">
-              <Plus size={18} /> レッスンを手動で追加
-            </button>
-          )}
-          <SheetSyncPanel sheetUrl={sheetUrl} onSaveSheetUrl={onSaveSheetUrl} onSyncSheet={onSyncSheet} onImportRows={onImportRows} />
-        </>
+      {showAdd ? (
+        <AddLessonForm onCancel={() => setShowAdd(false)} onCreate={(t, e) => { onCreate(t, e); setShowAdd(false); }} />
+      ) : (
+        <button onClick={() => setShowAdd(true)} className="mt-4 w-full rounded-md p-4 flex items-center justify-center gap-2 border-2 border-dashed border-[#73bfd7] text-[#166078] hover:text-[#16475f] hover:border-[#1687a7] hover:bg-[#e8f7fb] transition">
+          <Plus size={18} /> レッスンを手動で追加
+        </button>
       )}
+      <SheetSyncPanel onImportRows={onImportRows} />
     </div>
   );
 }
@@ -635,123 +512,68 @@ function AddLessonForm({ onCancel, onCreate }) {
   const [title, setTitle] = useState("");
   const [emoji, setEmoji] = useState("📇");
   return (
-    <div className="card-paper rounded-md p-4 mt-4 border border-[#c9bb9a] slide-up">
+    <div className="card-paper rounded-md p-4 mt-4 border border-[#b7d6e6] slide-up">
       <div className="flex gap-3 mb-3">
-        <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 2))} className="w-14 h-14 text-2xl text-center rounded border border-[#c9bb9a] bg-white/60" aria-label="レッスンのアイコン絵文字" />
-        <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="レッスン名（例: Lesson 1 — This is a book）" className="flex-1 rounded border border-[#c9bb9a] bg-white/60 px-3 text-[#3B2A1C] font-display" />
+        <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 2))} className="w-14 h-14 text-2xl text-center rounded border border-[#b7d6e6] bg-white/60" aria-label="レッスンのアイコン絵文字" />
+        <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="レッスン名（例: Lesson 1 — This is a book）" className="flex-1 rounded border border-[#b7d6e6] bg-white/60 px-3 text-[#16475f] font-display" />
       </div>
       <div className="flex gap-2 justify-end">
-        <button onClick={onCancel} className="px-3 py-1.5 text-sm text-[#6b5d44]">キャンセル</button>
-        <button disabled={!title.trim()} onClick={() => onCreate(title.trim(), emoji || "📇")} className="px-4 py-1.5 text-sm rounded bg-[#1F2A3C] text-[#F3ECDA] disabled:opacity-40">作成</button>
+        <button onClick={onCancel} className="px-3 py-1.5 text-sm text-[#42677a]">キャンセル</button>
+        <button disabled={!title.trim()} onClick={() => onCreate(title.trim(), emoji || "📇")} className="px-4 py-1.5 text-sm rounded bg-[#1687a7] text-[#ffffff] disabled:opacity-40">作成</button>
       </div>
     </div>
   );
 }
 
-/* ---------------- Sheet Sync Panel (teacher only) ---------------- */
-function SheetSyncPanel({ sheetUrl, onSaveSheetUrl, onSyncSheet, onImportRows }) {
-  const [url, setUrl] = useState(sheetUrl || "");
+/* ---------------- Settings / Import Panel ---------------- */
+function SheetSyncPanel({ onImportRows }) {
   const [status, setStatus] = useState(null);
-  const [confirming, setConfirming] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
-  const driveFileId = getGoogleDriveFileId(url);
-  const driveDownloadUrl = driveFileId ? normalizeSheetUrl(url) : "";
-
-  const doSync = async () => {
-    setConfirming(false);
-    if (!url.trim()) return;
-    if (driveDownloadUrl) {
-      setStatus({
-        type: "error",
-        message: "Google Driveのファイル共有URLはブラウザから直接取得できません。下のリンクでCSVを保存してから、ファイル選択で読み込んでください。",
-      });
-      return;
-    }
-    setStatus({ type: "loading", message: "読み込み中…" });
-    try {
-      await onSaveSheetUrl(url.trim());
-      const newIndex = await onSyncSheet(url.trim());
-      const totalCards = newIndex.reduce((s, m) => s + (m.count || 0), 0);
-      setStatus({ type: "success", message: `${newIndex.length}レッスン・${totalCards}枚のカードを読み込みました` });
-    } catch (e) {
-      setStatus({ type: "error", message: `読み込みに失敗しました: ${e?.message || "URLまたはCSV形式を確認してください"}` });
-    }
-  };
 
   const doFileImport = async (file) => {
     if (!file) return;
-    setStatus({ type: "loading", message: "読み込み中…" });
+    setStatus({ type: "loading", message: "読み込み中..." });
     try {
       const rows = parseSheetBuffer(await file.arrayBuffer(), file.name, file.type);
       const newIndex = await onImportRows(rows);
       const totalCards = newIndex.reduce((s, m) => s + (m.count || 0), 0);
-      setStatus({ type: "success", message: `${newIndex.length}レッスン・${totalCards}枚のカードを読み込みました` });
+      setStatus({ type: "success", message: newIndex.length + "レッスン・" + totalCards + "枚のカードを読み込みました" });
     } catch (e) {
-      setStatus({ type: "error", message: `読み込みに失敗しました: ${e?.message || "CSVまたはExcelファイルを確認してください"}` });
+      setStatus({ type: "error", message: "読み込みに失敗しました: " + (e?.message || "CSVまたはExcelファイルを確認してください") });
     }
   };
 
   return (
-    <div className="card-paper rounded-md p-4 mt-4 border border-[#c9bb9a]">
-      <div className="flex items-center gap-2 mb-2 text-[#3B2A1C]">
+    <div className="card-paper rounded-md p-4 mt-4 border border-[#b7d6e6]">
+      <div className="flex items-center gap-2 mb-2 text-[#16475f]">
         <FileSpreadsheet size={18} />
-        <h3 className="font-display font-bold">スプレッドシートから読み込み</h3>
+        <h3 className="font-display font-bold">設定</h3>
       </div>
-      <p className="text-xs text-[#6b5d44] mb-3">
-        Googleスプレッドシート（またはExcel）を「ウェブに公開 → CSV」の形にして、そのリンクを貼ってください。列は
+      <p className="text-xs text-[#42677a] mb-3">
+        CSVまたはExcelファイルからレッスンを読み込めます。列は
         <span className="font-mono"> lesson / english / image / emoji / note </span>
-        （日本語見出しでも可：レッスン / 英語 / 画像 / 絵文字 / メモ）。画像は列にURLを貼るだけでOKです。
+        （日本語見出しでも可: レッスン / 英語 / 画像 / 絵文字 / メモ）。画像の列にURLを貼るだけでOKです。
       </p>
-      <button onClick={() => setShowHelp((s) => !s)} className="text-xs text-[#8C6425] underline mb-3">
-        {showHelp ? "手順を隠す" : "公開リンクの作り方を見る"}
+      <button onClick={() => setShowHelp((s) => !s)} className="text-xs text-[#1687a7] underline mb-3">
+        {showHelp ? "手順を隠す" : "読み込み手順を見る"}
       </button>
       {showHelp && (
-        <ol className="text-xs text-[#6b5d44] list-decimal list-inside mb-3 space-y-1">
-          <li>Googleスプレッドシートを開く（Excelの場合は先にGoogleスプレッドシートにインポート）</li>
-          <li>「ファイル」→「共有」→「ウェブに公開」</li>
-          <li>公開する範囲でシートを選び、形式を「カンマ区切りの値(.csv)」にして公開</li>
-          <li>表示されたURLをコピーして下に貼り付け</li>
+        <ol className="text-xs text-[#42677a] list-decimal list-inside mb-3 space-y-1">
+          <li>下の既定CSVをダウンロードするか、自分のCSV/Excelファイルを用意</li>
+          <li>「CSV/Excelファイルを選んで読み込む」からファイルを選択</li>
+          <li>読み込むと現在のレッスン内容がファイルの内容に置き換わります</li>
         </ol>
       )}
-      <div className="flex gap-2 mb-2">
-        <LinkIcon size={16} className="text-[#6b5d44] shrink-0 mt-2.5" />
-        <input
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv"
-          className="flex-1 rounded border border-[#c9bb9a] bg-white/60 px-3 py-2 text-sm font-mono"
-        />
-      </div>
-      {driveDownloadUrl && (
-        <a
-          href={driveDownloadUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="mb-2 w-full rounded-md py-2 flex items-center justify-center gap-2 border border-[#8C6425] text-[#6b5d44] font-display font-semibold hover:bg-white/30"
-        >
-          <FileSpreadsheet size={16} />
-          DriveのCSVをダウンロードする
-        </a>
-      )}
-      {!confirming ? (
-        <button
-          disabled={!url.trim() || status?.type === "loading"}
-          onClick={() => setConfirming(true)}
-          className="w-full rounded-md py-2 flex items-center justify-center gap-2 bg-[#1F2A3C] text-[#F3ECDA] font-display font-semibold disabled:opacity-40"
-        >
-          {status?.type === "loading" ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
-          同期する
-        </button>
-      ) : (
-        <div className="text-sm bg-[#f6e3dd] border border-[#e0b7ab] rounded p-2">
-          <p className="text-[#7c2c1f] mb-2">同期すると現在の内容がスプレッドシートの内容に置き換わります（手動で追加した分も含む）。よろしいですか？</p>
-          <div className="flex gap-2 justify-end">
-            <button onClick={() => setConfirming(false)} className="text-[#6b5d44] px-2">やめる</button>
-            <button onClick={doSync} className="text-[#7c2c1f] font-semibold px-2">同期する</button>
-          </div>
-        </div>
-      )}
-      <label className="mt-2 w-full rounded-md py-2 flex items-center justify-center gap-2 border border-[#8C6425] text-[#6b5d44] font-display font-semibold cursor-pointer hover:bg-white/30">
+      <a
+        href={DEFAULT_SHEET_DOWNLOAD_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="mb-2 w-full rounded-md py-2 flex items-center justify-center gap-2 border border-[#73bfd7] text-[#166078] font-display font-semibold hover:bg-[#e8f7fb]"
+      >
+        <FileSpreadsheet size={16} />
+        既定CSVをダウンロードする
+      </a>
+      <label className="mt-2 w-full rounded-md py-2 flex items-center justify-center gap-2 border border-[#73bfd7] text-[#166078] font-display font-semibold cursor-pointer hover:bg-[#e8f7fb]">
         <FileSpreadsheet size={16} />
         CSV/Excelファイルを選んで読み込む
         <input
@@ -765,7 +587,7 @@ function SheetSyncPanel({ sheetUrl, onSaveSheetUrl, onSyncSheet, onImportRows })
         />
       </label>
       {status && status.type !== "loading" && (
-        <p className={`text-xs mt-2 ${status.type === "success" ? "text-[#2F6B4F]" : "text-[#a3402f]"}`}>{status.message}</p>
+        <p className={"text-xs mt-2 " + (status.type === "success" ? "text-[#16805d]" : "text-[#b42335]")}>{status.message}</p>
       )}
     </div>
   );
@@ -808,64 +630,64 @@ function LessonDetail({ lesson, isEditor, progress, onEnsureProgress, onBack, on
 
   return (
     <div className="pt-6">
-      <button onClick={onBack} className="flex items-center gap-1 text-[#D9C79A] text-sm mb-4 hover:text-[#F3ECDA]">
+      <button onClick={onBack} className="flex items-center gap-1 text-[#1687a7] text-sm mb-4 hover:text-[#16475f]">
         <ArrowLeft size={16} /> 引き出し一覧へ
       </button>
 
-      <div className="card-paper rounded-md p-4 border border-[#c9bb9a] mb-4">
+      <div className="card-paper rounded-md p-4 border border-[#b7d6e6] mb-4">
         {editingMeta ? (
           <div className="flex gap-3">
-            <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 2))} className="w-12 h-12 text-xl text-center rounded border border-[#c9bb9a]" />
-            <input value={title} onChange={(e) => setTitle(e.target.value)} className="flex-1 rounded border border-[#c9bb9a] px-3 font-display" />
-            <button onClick={() => { onUpdateMeta(title.trim() || lesson.title, emoji || lesson.emoji); setEditingMeta(false); }} className="px-3 rounded bg-[#1F2A3C] text-[#F3ECDA] text-sm">保存</button>
+            <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 2))} className="w-12 h-12 text-xl text-center rounded border border-[#b7d6e6]" />
+            <input value={title} onChange={(e) => setTitle(e.target.value)} className="flex-1 rounded border border-[#b7d6e6] px-3 font-display" />
+            <button onClick={() => { onUpdateMeta(title.trim() || lesson.title, emoji || lesson.emoji); setEditingMeta(false); }} className="px-3 rounded bg-[#1687a7] text-[#ffffff] text-sm">保存</button>
           </div>
         ) : (
           <div className="flex items-center gap-3">
             <div className="brass rounded w-11 h-11 flex items-center justify-center text-xl shrink-0">{lesson.emoji}</div>
             <div className="flex-1">
-              <div className="font-display text-xl font-bold text-[#3B2A1C]">{lesson.title}</div>
-              <div className="font-mono text-xs text-[#6b5d44]">{lesson.cards.length} 枚</div>
+              <div className="font-display text-xl font-bold text-[#16475f]">{lesson.title}</div>
+              <div className="font-mono text-xs text-[#42677a]">{lesson.cards.length} 枚</div>
             </div>
             {isEditor && (
               <>
-                <button onClick={() => setEditingMeta(true)} className="text-[#6b5d44] hover:text-[#3B2A1C]" aria-label="レッスン名を編集"><Pencil size={16} /></button>
-                <button onClick={() => setConfirmDelete(true)} className="text-[#a3402f] hover:text-[#7c2c1f]" aria-label="レッスンを削除"><Trash2 size={16} /></button>
+                <button onClick={() => setEditingMeta(true)} className="text-[#42677a] hover:text-[#16475f]" aria-label="レッスン名を編集"><Pencil size={16} /></button>
+                <button onClick={() => setConfirmDelete(true)} className="text-[#b42335] hover:text-[#b42335]" aria-label="レッスンを削除"><Trash2 size={16} /></button>
               </>
             )}
           </div>
         )}
         {confirmDelete && (
-          <div className="mt-3 text-sm bg-[#f6e3dd] border border-[#e0b7ab] rounded p-2 flex items-center justify-between">
-            <span className="text-[#7c2c1f]">このレッスンを削除しますか？カードもすべて消えます。</span>
+          <div className="mt-3 text-sm bg-[#fff1f3] border border-[#f0b8c0] rounded p-2 flex items-center justify-between">
+            <span className="text-[#b42335]">このレッスンを削除しますか？カードもすべて消えます。</span>
             <div className="flex gap-2 shrink-0 ml-2">
-              <button onClick={() => setConfirmDelete(false)} className="text-[#6b5d44]">やめる</button>
-              <button onClick={onDeleteLesson} className="text-[#7c2c1f] font-semibold">削除</button>
+              <button onClick={() => setConfirmDelete(false)} className="text-[#42677a]">やめる</button>
+              <button onClick={onDeleteLesson} className="text-[#b42335] font-semibold">削除</button>
             </div>
           </div>
         )}
       </div>
 
-      <button onClick={onStartReview} disabled={lesson.cards.length < 2} className="w-full mb-5 rounded-md py-3 flex items-center justify-center gap-2 bg-[#2F6B4F] text-[#F3ECDA] font-display font-bold text-lg shadow-md disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition">
+      <button onClick={onStartReview} disabled={lesson.cards.length < 2} className="w-full mb-5 rounded-md py-3 flex items-center justify-center gap-2 bg-[#16805d] text-[#ffffff] font-display font-bold text-lg shadow-md disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition">
         <Play size={20} /> 復習をはじめる
       </button>
-      {lesson.cards.length < 2 && <p className="text-xs text-[#D9C79A] -mt-3 mb-4">復習を始めるにはカードが2枚以上必要です</p>}
+      {lesson.cards.length < 2 && <p className="text-xs text-[#1687a7] -mt-3 mb-4">復習を始めるにはカードが2枚以上必要です</p>}
 
       <div className="space-y-2 mb-4">
         {lesson.cards.map((c) => (
-          <div key={c.id} className="card-paper rounded-md p-3 border border-[#c9bb9a] flex items-center gap-3">
+          <div key={c.id} className="card-paper rounded-md p-3 border border-[#b7d6e6] flex items-center gap-3">
             <div className="punch-hole ml-1 hidden sm:block" />
             <div className="w-10 h-10 shrink-0 flex items-center justify-center text-2xl rounded overflow-hidden bg-white/40">
               <CardVisual card={c} className="w-10 h-10 object-cover rounded text-2xl flex items-center justify-center" iconSize={18} />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="font-display text-[#3B2A1C] font-semibold truncate">{c.en}</div>
-              {c.note && <div className="text-xs text-[#6b5d44] truncate">{c.note}</div>}
+              <div className="font-display text-[#16475f] font-semibold truncate">{c.en}</div>
+              {c.note && <div className="text-xs text-[#42677a] truncate">{c.note}</div>}
             </div>
             <MasteryDots level={(prog[c.id] || emptyProgress()).level} />
             {isEditor && (
               <>
-                <button onClick={() => setEditingCard(c)} className="text-[#6b5d44] hover:text-[#3B2A1C]" aria-label="編集"><Pencil size={15} /></button>
-                <button onClick={() => onDeleteCard(c.id)} className="text-[#a3402f] hover:text-[#7c2c1f]" aria-label="削除"><Trash2 size={15} /></button>
+                <button onClick={() => setEditingCard(c)} className="text-[#42677a] hover:text-[#16475f]" aria-label="編集"><Pencil size={15} /></button>
+                <button onClick={() => onDeleteCard(c.id)} className="text-[#b42335] hover:text-[#b42335]" aria-label="削除"><Trash2 size={15} /></button>
               </>
             )}
           </div>
@@ -880,7 +702,7 @@ function LessonDetail({ lesson, isEditor, progress, onEnsureProgress, onBack, on
             onSave={(card) => { onUpsertCard(card); setShowCardForm(false); setEditingCard(null); }}
           />
         ) : (
-          <button onClick={() => setShowCardForm(true)} className="w-full rounded-md p-3 flex items-center justify-center gap-2 border-2 border-dashed border-[#6b5d44] text-[#D9C79A] hover:text-[#F3ECDA] hover:border-[#E3B355] transition">
+          <button onClick={() => setShowCardForm(true)} className="w-full rounded-md p-3 flex items-center justify-center gap-2 border-2 border-dashed border-[#73bfd7] text-[#1687a7] hover:text-[#16475f] hover:border-[#1687a7] hover:bg-[#e8f7fb] transition">
             <Plus size={16} /> カードを手動で追加
           </button>
         ))}
@@ -891,7 +713,7 @@ function LessonDetail({ lesson, isEditor, progress, onEnsureProgress, onBack, on
 function MasteryDots({ level }) {
   return (
     <div className="hidden sm:flex gap-0.5 mr-1" aria-label={`習熟度 ${level}/5`}>
-      {[0, 1, 2, 3, 4].map((i) => <div key={i} className={`w-1.5 h-1.5 rounded-full ${i < level ? "bg-[#2F6B4F]" : "bg-[#c9bb9a]"}`} />)}
+      {[0, 1, 2, 3, 4].map((i) => <div key={i} className={`w-1.5 h-1.5 rounded-full ${i < level ? "bg-[#16805d]" : "bg-[#b7d6e6]"}`} />)}
     </div>
   );
 }
@@ -920,12 +742,12 @@ function CardForm({ initial, onCancel, onSave }) {
   };
 
   return (
-    <div className="card-paper rounded-md p-4 border border-[#c9bb9a] slide-up">
+    <div className="card-paper rounded-md p-4 border border-[#b7d6e6] slide-up">
       <div className="flex gap-1.5 mb-3">
-        <button onClick={() => setVisualType("emoji")} className={`flex-1 text-sm px-3 py-2 rounded flex items-center justify-center gap-1.5 font-medium ${visualType === "emoji" ? "bg-[#1F2A3C] text-[#F3ECDA]" : "bg-white/50 text-[#6b5d44]"}`}>
+        <button onClick={() => setVisualType("emoji")} className={`flex-1 text-sm px-3 py-2 rounded flex items-center justify-center gap-1.5 font-medium ${visualType === "emoji" ? "bg-[#1687a7] text-[#ffffff]" : "bg-white/50 text-[#42677a]"}`}>
           <Smile size={15} /> 絵文字
         </button>
-        <button onClick={() => setVisualType("photo")} className={`flex-1 text-sm px-3 py-2 rounded flex items-center justify-center gap-1.5 font-medium ${visualType === "photo" ? "bg-[#1F2A3C] text-[#F3ECDA]" : "bg-white/50 text-[#6b5d44]"}`}>
+        <button onClick={() => setVisualType("photo")} className={`flex-1 text-sm px-3 py-2 rounded flex items-center justify-center gap-1.5 font-medium ${visualType === "photo" ? "bg-[#1687a7] text-[#ffffff]" : "bg-white/50 text-[#42677a]"}`}>
           <LinkIcon size={15} /> 画像URL
         </button>
       </div>
@@ -933,13 +755,13 @@ function CardForm({ initial, onCancel, onSave }) {
       {visualType === "emoji" ? (
         <>
           <div className="flex gap-3 mb-3">
-            <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 4))} placeholder="🖼️" className="w-16 h-16 text-3xl text-center rounded border border-[#c9bb9a] bg-white/60" aria-label="絵（絵文字）" />
+            <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 4))} placeholder="🖼️" className="w-16 h-16 text-3xl text-center rounded border border-[#b7d6e6] bg-white/60" aria-label="絵（絵文字）" />
             <EnNoteInputs en={en} setEn={setEn} note={note} setNote={setNote} />
           </div>
           <div className="mb-3">
             <div className="flex flex-wrap gap-1 mb-2">
               {Object.keys(EMOJI_BANK).map((k) => (
-                <button key={k} onClick={() => setTab(k)} className={`text-xs px-2 py-1 rounded font-mono ${tab === k ? "bg-[#1F2A3C] text-[#F3ECDA]" : "bg-white/50 text-[#6b5d44]"}`}>{k}</button>
+                <button key={k} onClick={() => setTab(k)} className={`text-xs px-2 py-1 rounded font-mono ${tab === k ? "bg-[#1687a7] text-[#ffffff]" : "bg-white/50 text-[#42677a]"}`}>{k}</button>
               ))}
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -952,23 +774,23 @@ function CardForm({ initial, onCancel, onSave }) {
       ) : (
         <>
           <div className="flex gap-3 mb-3">
-            <div className="w-16 h-16 rounded border border-[#c9bb9a] bg-white/60 flex items-center justify-center overflow-hidden shrink-0">
+            <div className="w-16 h-16 rounded border border-[#b7d6e6] bg-white/60 flex items-center justify-center overflow-hidden shrink-0">
               {normalizedPhotoUrl ? (
                 <img src={normalizedPhotoUrl} alt="" className="w-16 h-16 object-cover" onError={(e) => (e.currentTarget.style.display = "none")} />
               ) : (
-                <ImageOff className="text-[#8a7a5c]" size={20} />
+                <ImageOff className="text-[#6b8794]" size={20} />
               )}
             </div>
             <EnNoteInputs en={en} setEn={setEn} note={note} setNote={setNote} />
           </div>
-          <input value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} placeholder="https://example.com/apple.jpg" className="w-full rounded border border-[#c9bb9a] bg-white/60 px-3 py-2 text-sm mb-1" />
-          <p className="text-[10px] text-[#8a7a5c] mb-2">画像はどこかにアップロード済みのものへのリンクを貼ってください。多くの場合はスプレッドシート連携でまとめて登録する方が簡単です。</p>
+          <input value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} placeholder="https://example.com/apple.jpg" className="w-full rounded border border-[#b7d6e6] bg-white/60 px-3 py-2 text-sm mb-1" />
+          <p className="text-[10px] text-[#6b8794] mb-2">画像はどこかにアップロード済みのものへのリンクを貼ってください。多くの場合はスプレッドシート連携でまとめて登録する方が簡単です。</p>
         </>
       )}
 
       <div className="flex gap-2 justify-end mt-2">
-        <button onClick={onCancel} className="px-3 py-1.5 text-sm text-[#6b5d44]">キャンセル</button>
-        <button disabled={!canSave} onClick={handleSave} className="px-4 py-1.5 text-sm rounded bg-[#1F2A3C] text-[#F3ECDA] disabled:opacity-40">{initial ? "更新" : "追加"}</button>
+        <button onClick={onCancel} className="px-3 py-1.5 text-sm text-[#42677a]">キャンセル</button>
+        <button disabled={!canSave} onClick={handleSave} className="px-4 py-1.5 text-sm rounded bg-[#1687a7] text-[#ffffff] disabled:opacity-40">{initial ? "更新" : "追加"}</button>
       </div>
     </div>
   );
@@ -977,8 +799,8 @@ function CardForm({ initial, onCancel, onSave }) {
 function EnNoteInputs({ en, setEn, note, setNote }) {
   return (
     <div className="flex-1 flex flex-col gap-2">
-      <input value={en} onChange={(e) => setEn(e.target.value)} placeholder="This is a book." className="rounded border border-[#c9bb9a] bg-white/60 px-3 py-2 font-display text-[#3B2A1C]" autoFocus />
-      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="メモ（任意・出題には使われません）" className="rounded border border-[#c9bb9a] bg-white/40 px-3 py-1.5 text-sm text-[#6b5d44]" />
+      <input value={en} onChange={(e) => setEn(e.target.value)} placeholder="This is a book." className="rounded border border-[#b7d6e6] bg-white/60 px-3 py-2 font-display text-[#16475f]" autoFocus />
+      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="メモ（任意・出題には使われません）" className="rounded border border-[#b7d6e6] bg-white/40 px-3 py-1.5 text-sm text-[#42677a]" />
     </div>
   );
 }
@@ -1040,21 +862,21 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
   return (
     <div className="pt-6">
       <div className="flex items-center justify-between mb-4">
-        <button onClick={onExit} className="text-[#D9C79A] text-sm flex items-center gap-1 hover:text-[#F3ECDA]"><X size={16} /> 終了</button>
-        <div className="font-mono text-xs text-[#D9C79A]">{qIndex + 1} / {total}</div>
+        <button onClick={onExit} className="text-[#1687a7] text-sm flex items-center gap-1 hover:text-[#16475f]"><X size={16} /> 終了</button>
+        <div className="font-mono text-xs text-[#1687a7]">{qIndex + 1} / {total}</div>
       </div>
-      <div className="w-full h-2 bg-[#4a3520] rounded-full mb-6 overflow-hidden">
-        <div className="h-full bg-[#E3B355] transition-all duration-300" style={{ width: `${((qIndex + (selected ? 1 : 0)) / total) * 100}%` }} />
+      <div className="w-full h-2 bg-[#d7eef6] rounded-full mb-6 overflow-hidden">
+        <div className="h-full bg-[#73bfd7] transition-all duration-300" style={{ width: `${((qIndex + (selected ? 1 : 0)) / total) * 100}%` }} />
       </div>
 
-      <div className="card-paper rounded-md border border-[#c9bb9a] p-6 mb-5 text-center relative">
+      <div className="card-paper rounded-md border border-[#b7d6e6] p-6 mb-5 text-center relative">
         <div className="punch-hole absolute -top-2 left-1/2 -translate-x-1/2" />
         {q.type === "pic2en" ? (
           <div className="flex items-center justify-center min-h-[110px]">
             <CardVisual card={q.card} className="max-h-32 max-w-[220px] object-contain rounded text-7xl" iconSize={64} />
           </div>
         ) : (
-          <div className="font-display text-2xl font-bold text-[#3B2A1C] py-4 border-b-2 border-[#c9bb9a] inline-block px-4">{q.card.en}</div>
+          <div className="font-display text-2xl font-bold text-[#16475f] py-4 border-b-2 border-[#b7d6e6] inline-block px-4">{q.card.en}</div>
         )}
       </div>
 
@@ -1062,11 +884,11 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
         {q.choices.map((choice) => {
           const isThisSelected = selected?.choiceId === choice.id;
           const isAnswer = choice.id === q.card.id;
-          let cls = "bg-white/70 border-[#c9bb9a] text-[#3B2A1C] hover:bg-white";
+          let cls = "bg-white/70 border-[#b7d6e6] text-[#16475f] hover:bg-white";
           if (selected) {
-            if (isAnswer) cls = "bg-[#dcefe2] border-[#2F6B4F] text-[#1e4632]";
-            else if (isThisSelected) cls = "bg-[#f6e3dd] border-[#a3402f] text-[#7c2c1f]";
-            else cls = "bg-white/30 border-[#c9bb9a] text-[#8a7a5c] opacity-60";
+            if (isAnswer) cls = "bg-[#dcefe2] border-[#16805d] text-[#1e4632]";
+            else if (isThisSelected) cls = "bg-[#fff1f3] border-[#b42335] text-[#b42335]";
+            else cls = "bg-white/30 border-[#b7d6e6] text-[#6b8794] opacity-60";
           }
           return (
             <button key={choice.id} onClick={() => handleChoice(choice)} disabled={!!selected} className={`rounded-md border-2 p-4 flex items-center justify-center gap-2 font-display font-semibold text-lg transition min-h-[64px] ${cls}`}>
@@ -1080,10 +902,10 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
 
       {selected && (
         <div className="mt-5 slide-up">
-          <div className={`text-center font-display font-bold text-lg mb-3 ${selected.isCorrect ? "text-[#2F6B4F]" : "text-[#a3402f]"}`}>
+          <div className={`text-center font-display font-bold text-lg mb-3 ${selected.isCorrect ? "text-[#16805d]" : "text-[#b42335]"}`}>
             {selected.isCorrect ? "✓ 正解！" : q.type === "pic2en" ? `✗ ${q.card.en}` : "✗"}
           </div>
-          <button onClick={handleNext} className="w-full rounded-md py-3 bg-[#1F2A3C] text-[#F3ECDA] font-display font-bold text-lg hover:brightness-110 transition">
+          <button onClick={handleNext} className="w-full rounded-md py-3 bg-[#1687a7] text-[#ffffff] font-display font-bold text-lg hover:brightness-110 transition">
             {qIndex + 1 >= total ? "結果を見る" : "次へ"}
           </button>
         </div>
@@ -1098,12 +920,12 @@ function Summary({ result, onReviewAgain, onBackToLesson, onHome }) {
   return (
     <div className="pt-10 text-center slide-up">
       <div className="text-6xl mb-3">{pct >= 80 ? "🏅" : pct >= 50 ? "📗" : "📖"}</div>
-      <h2 className="font-display text-2xl font-bold text-[#F3ECDA] mb-1">セッション終了</h2>
-      <p className="text-[#D9C79A] mb-6 font-mono text-sm">{result.correct} / {result.total} 正解（{pct}%）・ +{result.xpEarned} XP</p>
+      <h2 className="font-display text-2xl font-bold text-[#16475f] mb-1">セッション終了</h2>
+      <p className="text-[#1687a7] mb-6 font-mono text-sm">{result.correct} / {result.total} 正解（{pct}%）・ +{result.xpEarned} XP</p>
       <div className="flex flex-col gap-3 max-w-xs mx-auto">
-        <button onClick={onReviewAgain} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#2F6B4F] text-[#F3ECDA] font-display font-bold hover:brightness-110 transition"><RotateCcw size={18} /> もう一度復習する</button>
-        <button onClick={onBackToLesson} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#5a4a30] text-[#F3ECDA] font-display font-semibold hover:brightness-110 transition"><BookOpen size={18} /> カード一覧に戻る</button>
-        <button onClick={onHome} className="rounded-md py-2 flex items-center justify-center gap-2 text-[#D9C79A] hover:text-[#F3ECDA] transition"><HomeIcon size={16} /> 引き出し一覧へ</button>
+        <button onClick={onReviewAgain} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#16805d] text-[#ffffff] font-display font-bold hover:brightness-110 transition"><RotateCcw size={18} /> もう一度復習する</button>
+        <button onClick={onBackToLesson} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#1687a7] text-[#ffffff] font-display font-semibold hover:brightness-110 transition"><BookOpen size={18} /> カード一覧に戻る</button>
+        <button onClick={onHome} className="rounded-md py-2 flex items-center justify-center gap-2 text-[#1687a7] hover:text-[#16475f] transition"><HomeIcon size={16} /> 引き出し一覧へ</button>
       </div>
     </div>
   );
