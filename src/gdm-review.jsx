@@ -5,7 +5,7 @@ import {
   Plus, Trash2, Pencil, ArrowLeft, Check, X, Play,
   Flame, Star, ChevronRight, BookOpen, Loader2, RotateCcw,
   Home as HomeIcon, Settings, Smile, ImageOff,
-  FileSpreadsheet, Link as LinkIcon
+  FileSpreadsheet, Link as LinkIcon, Volume2
 } from "lucide-react";
 
 /* ---------------------------------------------------------
@@ -86,9 +86,14 @@ const EMOJI_BANK = {
 /* ---------------- spreadsheet import helpers ---------------- */
 const FIELD_ALIASES = {
   lesson: ["lesson", "レッスン", "レッスン名", "unit", "ユニット"],
+  item: ["item", "no", "number", "question", "worksheet", "work", "問題", "番号", "項目"],
   emoji: ["emoji", "絵文字"],
   en: ["english", "en", "英語", "英文", "word", "text", "単語"],
+  sentence: ["sentence", "prompt", "line", "英語文", "文", "設問", "文章"],
+  choices: ["choices", "options", "choice", "選択肢", "候補"],
+  answer: ["answer", "correct", "正解", "答え"],
   image: ["image", "imageurl", "image_url", "画像", "画像url", "picture", "photo"],
+  audio: ["audio", "audiourl", "audio_url", "sound", "音声", "音声url"],
   note: ["note", "メモ", "memo"],
 };
 const normKey = (k) => (k || "").toString().trim().toLowerCase().replace(/\s+/g, "");
@@ -111,23 +116,55 @@ function slugify(str) {
     .replace(/^-+|-+$/g, "");
   return base.slice(0, 40) || "x";
 }
+function normalizeAudioUrl(url) {
+  const trimmed = (url || "").trim();
+  if (!trimmed) return "";
+  return getGoogleDriveFileId(trimmed) ? normalizeSheetUrl(trimmed) : trimmed;
+}
+function splitChoices(value) {
+  return (value || "")
+    .split(/[|／/、,，]/)
+    .map((choice) => choice.trim())
+    .filter(Boolean);
+}
 function buildContentFromRows(rows) {
   const order = [];
   const byTitle = {};
   rows.forEach((row) => {
-    const en = getField(row, "en");
-    if (!en) return;
+    const sentence = getField(row, "sentence");
+    const en = sentence || getField(row, "en");
+    const choices = splitChoices(getField(row, "choices"));
+    const answer = getField(row, "answer");
+    const audioUrl = normalizeAudioUrl(getField(row, "audio"));
+    if (!en && choices.length === 0 && !answer) return;
     const title = getField(row, "lesson") || "未分類";
+    const item = getField(row, "item");
     const emoji = getField(row, "emoji");
     const image = normalizeImageUrl(getField(row, "image"));
     const note = getField(row, "note");
     if (!byTitle[title]) {
-      byTitle[title] = { title, emoji: emoji || "📇", cards: [] };
+      byTitle[title] = { title, emoji: emoji || "📇", cards: [], cardsByItem: {} };
       order.push(title);
     } else if (emoji && byTitle[title].emoji === "📇") {
       byTitle[title].emoji = emoji;
     }
-    byTitle[title].cards.push({ en, image, emoji, note });
+    const isWorksheetRow = !!(sentence || choices.length > 0 || answer || audioUrl || item);
+    if (isWorksheetRow) {
+      const itemKey = item || image || en || `row-${byTitle[title].cards.length + 1}`;
+      let card = byTitle[title].cardsByItem[itemKey];
+      if (!card) {
+        card = { en: en || answer || itemKey, image, emoji, note, audioUrl, worksheetLines: [] };
+        byTitle[title].cardsByItem[itemKey] = card;
+        byTitle[title].cards.push(card);
+      }
+      if (image && !card.image) card.image = image;
+      if (emoji && !card.emoji) card.emoji = emoji;
+      if (note && !card.note) card.note = note;
+      if (audioUrl && !card.audioUrl) card.audioUrl = audioUrl;
+      card.worksheetLines.push({ sentence: en, choices, answer, audioUrl, note });
+    } else {
+      byTitle[title].cards.push({ en, image, emoji, note, audioUrl });
+    }
   });
 
   const usedLessonIds = new Set();
@@ -152,6 +189,8 @@ function buildContentFromRows(rows) {
         note: c.note,
         visualType: c.image ? "photo" : "emoji",
         photoUrl: c.image || undefined,
+        audioUrl: c.audioUrl || undefined,
+        worksheetLines: c.worksheetLines || undefined,
         emoji: c.image ? "" : c.emoji || "❓",
       };
     });
@@ -550,9 +589,9 @@ function SheetSyncPanel({ onImportRows }) {
         <h3 className="font-display font-bold">設定</h3>
       </div>
       <p className="text-xs text-[#42677a] mb-3">
-        CSVまたはExcelファイルからレッスンを読み込めます。列は
-        <span className="font-mono"> lesson / english / image / emoji / note </span>
-        （日本語見出しでも可: レッスン / 英語 / 画像 / 絵文字 / メモ）。画像の列にURLを貼るだけでOKです。
+        CSVまたはExcelファイルからワークシートを読み込めます。列は
+        <span className="font-mono"> lesson / item / image / sentence / choices / answer / audio / note </span>
+        を使えます。画像と音声はURLで指定できます。
       </p>
       <button onClick={() => setShowHelp((s) => !s)} className="text-xs text-[#1687a7] underline mb-3">
         {showHelp ? "手順を隠す" : "読み込み手順を見る"}
@@ -561,6 +600,7 @@ function SheetSyncPanel({ onImportRows }) {
         <ol className="text-xs text-[#42677a] list-decimal list-inside mb-3 space-y-1">
           <li>下の既定CSVをダウンロードするか、自分のCSV/Excelファイルを用意</li>
           <li>「CSV/Excelファイルを選んで読み込む」からファイルを選択</li>
+          <li>同じ lesson と item の行は、1つの絵に複数の文があるワークシート項目としてまとまります</li>
           <li>読み込むと現在のレッスン内容がファイルの内容に置き換わります</li>
         </ol>
       )}
@@ -610,6 +650,46 @@ function CardVisual({ card, className, iconSize = 18 }) {
     );
   }
   return <span className={className}>{card.emoji || "🖼️"}</span>;
+}
+
+function AudioButton({ src, label = "音声" }) {
+  if (!src) return null;
+  return (
+    <a
+      href={src}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-1 rounded border border-[#73bfd7] px-2 py-1 text-[11px] text-[#166078] hover:bg-[#e8f7fb]"
+    >
+      <Volume2 size={13} />
+      {label}
+    </a>
+  );
+}
+
+function WorksheetLines({ lines, compact = false }) {
+  if (!lines?.length) return null;
+  return (
+    <div className={compact ? "space-y-1" : "space-y-2"}>
+      {lines.map((line, index) => (
+        <div key={index} className="text-left">
+          <div className={compact ? "text-xs text-[#16475f]" : "text-sm text-[#16475f]"}>
+            {line.sentence || line.answer}
+          </div>
+          {line.choices?.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {line.choices.map((choice) => (
+                <span key={choice} className="rounded border border-[#b7d6e6] bg-white/70 px-2 py-0.5 text-[11px] text-[#42677a]">
+                  {choice}
+                </span>
+              ))}
+            </div>
+          )}
+          {line.audioUrl && <div className="mt-1"><AudioButton src={line.audioUrl} /></div>}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /* ---------------- Lesson Detail ---------------- */
@@ -674,14 +754,21 @@ function LessonDetail({ lesson, isEditor, progress, onEnsureProgress, onBack, on
 
       <div className="space-y-2 mb-4">
         {lesson.cards.map((c) => (
-          <div key={c.id} className="card-paper rounded-md p-3 border border-[#b7d6e6] flex items-center gap-3">
+          <div key={c.id} className={`card-paper rounded-md p-3 border border-[#b7d6e6] flex gap-3 ${c.worksheetLines?.length ? "items-start" : "items-center"}`}>
             <div className="punch-hole ml-1 hidden sm:block" />
-            <div className="w-10 h-10 shrink-0 flex items-center justify-center text-2xl rounded overflow-hidden bg-white/40">
-              <CardVisual card={c} className="w-10 h-10 object-cover rounded text-2xl flex items-center justify-center" iconSize={18} />
+            <div className={`${c.worksheetLines?.length ? "w-24 h-24" : "w-10 h-10"} shrink-0 flex items-center justify-center text-2xl rounded overflow-hidden bg-white/40`}>
+              <CardVisual card={c} className={`${c.worksheetLines?.length ? "w-24 h-24" : "w-10 h-10"} object-cover rounded text-2xl flex items-center justify-center`} iconSize={18} />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="font-display text-[#16475f] font-semibold truncate">{c.en}</div>
-              {c.note && <div className="text-xs text-[#42677a] truncate">{c.note}</div>}
+              {c.worksheetLines?.length ? (
+                <WorksheetLines lines={c.worksheetLines} compact />
+              ) : (
+                <>
+                  <div className="font-display text-[#16475f] font-semibold truncate">{c.en}</div>
+                  {c.note && <div className="text-xs text-[#42677a] truncate">{c.note}</div>}
+                  {c.audioUrl && <div className="mt-1"><AudioButton src={c.audioUrl} /></div>}
+                </>
+              )}
             </div>
             <MasteryDots level={(prog[c.id] || emptyProgress()).level} />
             {isEditor && (
@@ -723,10 +810,12 @@ function CardForm({ initial, onCancel, onSave }) {
   const [visualType, setVisualType] = useState(initial?.visualType || "emoji");
   const [emoji, setEmoji] = useState(initial?.emoji || "");
   const [photoUrl, setPhotoUrl] = useState(initial?.photoUrl || "");
+  const [audioUrl, setAudioUrl] = useState(initial?.audioUrl || "");
   const [en, setEn] = useState(initial?.en || "");
   const [note, setNote] = useState(initial?.note || "");
   const [tab, setTab] = useState(Object.keys(EMOJI_BANK)[0]);
   const normalizedPhotoUrl = normalizeImageUrl(photoUrl);
+  const normalizedAudioUrl = normalizeAudioUrl(audioUrl);
 
   const canSave = en.trim() && ((visualType === "emoji" && emoji.trim()) || (visualType === "photo" && photoUrl.trim()));
 
@@ -738,6 +827,7 @@ function CardForm({ initial, onCancel, onSave }) {
       visualType,
       emoji: visualType === "emoji" ? emoji.trim() : "",
       photoUrl: visualType === "photo" ? normalizedPhotoUrl : undefined,
+      audioUrl: normalizedAudioUrl || undefined,
     });
   };
 
@@ -788,6 +878,10 @@ function CardForm({ initial, onCancel, onSave }) {
         </>
       )}
 
+      <div className="mb-2">
+        <input value={audioUrl} onChange={(e) => setAudioUrl(e.target.value)} placeholder="音声URL（任意）" className="w-full rounded border border-[#b7d6e6] bg-white/60 px-3 py-2 text-sm" />
+      </div>
+
       <div className="flex gap-2 justify-end mt-2">
         <button onClick={onCancel} className="px-3 py-1.5 text-sm text-[#42677a]">キャンセル</button>
         <button disabled={!canSave} onClick={handleSave} className="px-4 py-1.5 text-sm rounded bg-[#1687a7] text-[#ffffff] disabled:opacity-40">{initial ? "更新" : "追加"}</button>
@@ -821,6 +915,9 @@ function makeQuestion(card, allCards) {
   const shuffled = [...distractPool].sort(() => Math.random() - 0.5).slice(0, 3);
   const choiceCards = [...shuffled, card].sort(() => Math.random() - 0.5);
   return { card, type, choices: choiceCards };
+}
+function cardLabel(card) {
+  return card.worksheetLines?.[0]?.sentence || card.en;
 }
 
 function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) {
@@ -875,6 +972,11 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
           <div className="flex items-center justify-center min-h-[110px]">
             <CardVisual card={q.card} className="max-h-32 max-w-[220px] object-contain rounded text-7xl" iconSize={64} />
           </div>
+        ) : q.card.worksheetLines?.length ? (
+          <div className="mx-auto max-w-md py-2">
+            <WorksheetLines lines={q.card.worksheetLines} />
+            {q.card.audioUrl && <div className="mt-2 flex justify-center"><AudioButton src={q.card.audioUrl} /></div>}
+          </div>
         ) : (
           <div className="font-display text-2xl font-bold text-[#16475f] py-4 border-b-2 border-[#b7d6e6] inline-block px-4">{q.card.en}</div>
         )}
@@ -894,7 +996,7 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
             <button key={choice.id} onClick={() => handleChoice(choice)} disabled={!!selected} className={`rounded-md border-2 p-4 flex items-center justify-center gap-2 font-display font-semibold text-lg transition min-h-[64px] ${cls}`}>
               {selected && isAnswer && <Check size={18} className="stamp shrink-0" />}
               {selected && isThisSelected && !isAnswer && <X size={18} className="stamp shrink-0" />}
-              {q.type === "pic2en" ? choice.en : <CardVisual card={choice} className="max-h-14 max-w-[90px] object-contain text-3xl" iconSize={28} />}
+              {q.type === "pic2en" ? cardLabel(choice) : <CardVisual card={choice} className="max-h-14 max-w-[90px] object-contain text-3xl" iconSize={28} />}
             </button>
           );
         })}
