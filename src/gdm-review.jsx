@@ -64,6 +64,16 @@ function normalizeImageUrl(url) {
   return trimmed;
 }
 
+function normalizeSheetUrl(url) {
+  const trimmed = (url || "").trim();
+  const driveFileId = getGoogleDriveFileId(trimmed);
+  if (driveFileId) {
+    return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(driveFileId)}`;
+  }
+
+  return trimmed;
+}
+
 const EMOJI_BANK = {
   "人": ["🧑", "👦", "👧", "👨", "👩", "👴", "👵", "🧑‍🏫", "🧑‍🎓", "👶"],
   "もの": ["📕", "✏️", "🖊️", "🪑", "🚪", "🪟", "🗝️", "🕰️", "🍎", "🍞", "🥛", "☕", "🎩", "👞", "🪆", "✉️"],
@@ -150,17 +160,33 @@ function buildContentFromRows(rows) {
   });
   return { index, lessonsMap };
 }
+function isExcelBuffer(buffer) {
+  const bytes = new Uint8Array(buffer.slice(0, 4));
+  return bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+}
+
 async function fetchAndParseSheet(url) {
-  const res = await fetch(url, { mode: "cors" });
+  const fetchUrl = normalizeSheetUrl(url);
+  const res = await fetch(fetchUrl, { mode: "cors" });
   if (!res.ok) throw new Error("http " + res.status);
+
   const lower = url.toLowerCase().split("?")[0];
-  if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
-    const buf = await res.arrayBuffer();
+  const contentType = (res.headers.get("content-type") || "").toLowerCase();
+  const buf = await res.arrayBuffer();
+  const looksLikeExcel =
+    lower.endsWith(".xlsx") ||
+    lower.endsWith(".xls") ||
+    contentType.includes("spreadsheet") ||
+    contentType.includes("excel") ||
+    isExcelBuffer(buf);
+
+  if (looksLikeExcel) {
     const wb = XLSX.read(buf, { type: "array" });
     const sheet = wb.Sheets[wb.SheetNames[0]];
     return XLSX.utils.sheet_to_json(sheet, { defval: "" });
   }
-  const text = await res.text();
+
+  const text = new TextDecoder("utf-8").decode(buf).replace(/^\uFEFF/, "");
   const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
   return parsed.data;
 }
