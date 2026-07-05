@@ -336,17 +336,7 @@ export default function App() {
     await safeSet("progress:" + lessonId, JSON.stringify(prog), false);
   }, []);
 
-  // ---- manual lesson / card mutations ----
-  const createLesson = async (title, emoji) => {
-    const id = uid();
-    const lesson = { id, title, emoji, cards: [] };
-    const newIdx = [...index, { id, title, emoji, count: 0 }];
-    setIndex(newIdx);
-    setLessons((prev) => ({ ...prev, [id]: lesson }));
-    await safeSet("lesson-index", JSON.stringify(newIdx), true);
-    await safeSet("lesson:" + id, JSON.stringify(lesson), true);
-    return id;
-  };
+  // ---- lesson / card mutations ----
   const updateLessonMeta = async (id, title, emoji) => {
     const lesson = { ...lessons[id], title, emoji };
     setLessons((prev) => ({ ...prev, [id]: lesson }));
@@ -465,10 +455,6 @@ export default function App() {
                 index={index}
                 onImportRows={importRows}
                 onOpen={(id) => setScreen({ name: "lesson", id })}
-                onCreate={async (title, emoji) => {
-                  const id = await createLesson(title, emoji);
-                  setScreen({ name: "lesson", id });
-                }}
               />
             )}
             {screen.name === "lesson" && lessons[screen.id] && (
@@ -546,17 +532,16 @@ function TopBar({ screen, setScreen, xp, streak }) {
 }
 
 /* ---------------- Home ---------------- */
-function Home({ index, onImportRows, onOpen, onCreate }) {
-  const [showAdd, setShowAdd] = useState(false);
+function Home({ index, onImportRows, onOpen }) {
   return (
     <div className="pt-6">
       <p className="font-display italic text-[#1687a7] mb-2 text-[15px]">Look at the picture. Say it in English.</p>
       <p className="text-[11px] text-[#42677a] mb-5 font-mono">レッスン内容は共有されます。復習の記録(習熟度・XP)は自分だけに保存されます。</p>
 
-      {index.length === 0 && !showAdd && (
+      {index.length === 0 && (
         <div className="card-paper rounded-md p-6 text-center mb-4 border border-[#b7d6e6]">
           <p className="font-display text-lg text-[#16475f] mb-1">まだレッスンがありません</p>
-          <p className="text-sm text-[#42677a]">下の設定からCSV/Excelを読み込むか、手動で追加できます</p>
+          <p className="text-sm text-[#42677a]">下の設定からCSV/Excelを読み込んでください</p>
         </div>
       )}
 
@@ -573,31 +558,7 @@ function Home({ index, onImportRows, onOpen, onCreate }) {
         ))}
       </div>
 
-      {showAdd ? (
-        <AddLessonForm onCancel={() => setShowAdd(false)} onCreate={(t, e) => { onCreate(t, e); setShowAdd(false); }} />
-      ) : (
-        <button onClick={() => setShowAdd(true)} className="mt-4 w-full rounded-md p-4 flex items-center justify-center gap-2 border-2 border-dashed border-[#73bfd7] text-[#166078] hover:text-[#16475f] hover:border-[#1687a7] hover:bg-[#e8f7fb] transition">
-          <Plus size={18} /> レッスンを手動で追加
-        </button>
-      )}
       <SheetSyncPanel onImportRows={onImportRows} />
-    </div>
-  );
-}
-
-function AddLessonForm({ onCancel, onCreate }) {
-  const [title, setTitle] = useState("");
-  const [emoji, setEmoji] = useState("📇");
-  return (
-    <div className="card-paper rounded-md p-4 mt-4 border border-[#b7d6e6] slide-up">
-      <div className="flex gap-3 mb-3">
-        <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 2))} className="w-14 h-14 text-2xl text-center rounded border border-[#b7d6e6] bg-white/60" aria-label="レッスンのアイコン絵文字" />
-        <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="レッスン名（例: Lesson 1 — This is a book）" className="flex-1 rounded border border-[#b7d6e6] bg-white/60 px-3 text-[#16475f] font-display" />
-      </div>
-      <div className="flex gap-2 justify-end">
-        <button onClick={onCancel} className="px-3 py-1.5 text-sm text-[#42677a]">キャンセル</button>
-        <button disabled={!title.trim()} onClick={() => onCreate(title.trim(), emoji || "📇")} className="px-4 py-1.5 text-sm rounded bg-[#1687a7] text-[#ffffff] disabled:opacity-40">作成</button>
-      </div>
     </div>
   );
 }
