@@ -559,7 +559,7 @@ WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,_
       <p className="text-xs text-[#42677a] mb-3">
         CSVまたはExcelファイルからワークシートを読み込めます。列は
         <span className="font-mono"> lesson / item / image / sentence / choices / answer / audio / note </span>
-        を使えます。画像と音声はURLで指定できます。
+        を使えます。画像と音声はURLで指定できます。Google Driveの音声はリンクを知っている人が閲覧できる設定にし、アプリ内ではDriveのプレビュープレイヤーで再生します。
       </p>
       <button onClick={() => setShowHelp((s) => !s)} className="text-xs text-[#1687a7] underline mb-3">
         {showHelp ? "手順を隠す" : "読み込み手順を見る"}
@@ -826,7 +826,6 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
           </div>
         ))}
       </div>
-      {card.audioUrl && <div className="mt-3 flex justify-center"><AudioButton src={card.audioUrl} /></div>}
       {!selected && (
         <button
           type="button"
