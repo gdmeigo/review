@@ -16,8 +16,8 @@ import {
 
    Content (lessons & cards) is SHARED across everyone using
    this artifact. Each person's own review progress and XP
-   stay PRIVATE to them. Settings can add cards by hand or
-   import a CSV / Excel file — images are just URLs typed into a spreadsheet
+   stay PRIVATE to them. Settings imports a CSV / Excel file —
+   images are just URLs typed into a spreadsheet
    column, no upload needed.
 --------------------------------------------------------- */
 
@@ -410,9 +410,11 @@ export default function App() {
             {screen.name === "home" && (
               <Home
                 index={index}
-                onImportRows={importRows}
                 onOpen={(id) => setScreen({ name: "lesson", id })}
               />
+            )}
+            {screen.name === "settings" && (
+              <SettingsScreen onImportRows={importRows} />
             )}
             {screen.name === "lesson" && lessons[screen.id] && (
               <LessonDetail
@@ -462,7 +464,7 @@ function TopBar({ screen, setScreen, xp, streak }) {
         <div className="flex items-center gap-3 font-mono text-sm shrink-0">
           <div className="flex items-center gap-1 text-[#1687a7]"><Flame size={16} /> {streak}</div>
           <div className="flex items-center gap-1 text-[#16805d]"><Star size={16} /> {xp}</div>
-          <button onClick={() => setScreen({ name: "home" })} className="flex items-center gap-1 text-[10px] bg-[#1687a7] text-white px-2 py-1 rounded" title="設定">
+          <button onClick={() => setScreen({ name: "settings" })} className="flex items-center gap-1 text-[10px] bg-[#1687a7] text-white px-2 py-1 rounded" title="設定">
             <Settings size={12} /> 設定
           </button>
           {screen.name !== "home" && (
@@ -481,7 +483,7 @@ function TopBar({ screen, setScreen, xp, streak }) {
 }
 
 /* ---------------- Home ---------------- */
-function Home({ index, onImportRows, onOpen }) {
+function Home({ index, onOpen }) {
   return (
     <div className="pt-6">
       <p className="font-display italic text-[#1687a7] mb-2 text-[15px]">Look at the picture. Say it in English.</p>
@@ -490,7 +492,7 @@ function Home({ index, onImportRows, onOpen }) {
       {index.length === 0 && (
         <div className="card-paper rounded-md p-6 text-center mb-4 border border-[#b7d6e6]">
           <p className="font-display text-lg text-[#16475f] mb-1">まだレッスンがありません</p>
-          <p className="text-sm text-[#42677a]">下の設定からCSV/Excelを読み込んでください</p>
+          <p className="text-sm text-[#42677a]">右上の設定からCSV/Excelを読み込んでください</p>
         </div>
       )}
 
@@ -506,7 +508,13 @@ function Home({ index, onImportRows, onOpen }) {
           </button>
         ))}
       </div>
+    </div>
+  );
+}
 
+function SettingsScreen({ onImportRows }) {
+  return (
+    <div className="pt-6">
       <SheetSyncPanel onImportRows={onImportRows} />
     </div>
   );
