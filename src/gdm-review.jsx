@@ -188,6 +188,9 @@ async function fetchAndParseSheet(url) {
 
   const text = new TextDecoder("utf-8").decode(buf).replace(/^\uFEFF/, "");
   const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+  if (parsed.errors.length > 0) {
+    throw new Error(parsed.errors[0].message || "CSV parse failed");
+  }
   return parsed.data;
 }
 
@@ -369,6 +372,9 @@ export default function App() {
   const syncFromSheet = async (url) => {
     const rows = await fetchAndParseSheet(url);
     const { index: newIndex, lessonsMap: newLessons } = buildContentFromRows(rows);
+    if (newIndex.length === 0) {
+      throw new Error("CSVに english 列のカードが見つかりませんでした");
+    }
     for (const oldMeta of index) {
       if (!newLessons[oldMeta.id]) await safeDelete("lesson:" + oldMeta.id, true);
     }
@@ -651,7 +657,7 @@ function SheetSyncPanel({ sheetUrl, onSaveSheetUrl, onSyncSheet }) {
       const totalCards = newIndex.reduce((s, m) => s + (m.count || 0), 0);
       setStatus({ type: "success", message: `${newIndex.length}レッスン・${totalCards}枚のカードを読み込みました` });
     } catch (e) {
-      setStatus({ type: "error", message: "読み込みに失敗しました。URLが「ウェブに公開」されたCSVリンクか確認してください。" });
+      setStatus({ type: "error", message: `読み込みに失敗しました: ${e?.message || "URLまたはCSV形式を確認してください"}` });
     }
   };
 
