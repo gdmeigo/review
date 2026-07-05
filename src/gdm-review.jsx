@@ -160,11 +160,22 @@ function parseClozeSentence(value, answerValue) {
       answers: explicitAnswers,
     };
   }
+  if (answers.length === 0 && /_{2,}/.test(raw)) {
+    const blankCount = raw.split(/_{2,}/).length - 1;
+    return {
+      sentence: raw,
+      clozeParts: raw.split(/_{2,}/),
+      answers: Array.from({ length: blankCount }, () => ""),
+    };
+  }
   return {
     sentence: answers.length > 0 ? parts.join("____") : raw,
     clozeParts: answers.length > 0 ? parts : null,
     answers: explicitAnswers.length > 0 ? explicitAnswers : answers,
   };
+}
+function isAnswerCorrect(expected, actual) {
+  return !expected || actual === expected;
 }
 function buildContentFromRows(rows) {
   const order = [];
@@ -816,7 +827,7 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
 
   const isCorrect = () =>
     lines.every((line, lineIndex) =>
-      (line.answers || []).every((answer, blankIndex) => fills[`${lineIndex}-${blankIndex}`] === answer)
+      (line.answers || []).every((answer, blankIndex) => isAnswerCorrect(answer, fills[`${lineIndex}-${blankIndex}`]))
     );
 
   return (
@@ -834,7 +845,7 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
                 <span key={partIndex}>
                   {part}
                   {partIndex < (line.answers || []).length && (
-                    <span className={`mx-1 inline-flex min-w-20 items-center justify-center border-b-2 px-2 ${selected ? fills[`${lineIndex}-${partIndex}`] === line.answers[partIndex] ? "border-[#16805d] text-[#16805d]" : "border-[#b42335] text-[#b42335]" : "border-[#1687a7] text-[#16475f]"}`}>
+                    <span className={`mx-1 inline-flex min-w-20 items-center justify-center border-b-2 px-2 ${selected ? isAnswerCorrect(line.answers[partIndex], fills[`${lineIndex}-${partIndex}`]) ? "border-[#16805d] text-[#16805d]" : "border-[#b42335] text-[#b42335]" : "border-[#1687a7] text-[#16475f]"}`}>
                       {fills[`${lineIndex}-${partIndex}`] || " "}
                     </span>
                   )}
