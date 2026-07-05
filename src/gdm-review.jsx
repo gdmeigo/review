@@ -3,7 +3,7 @@ import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import {
   ArrowLeft, Check, X, Play,
-  Flame, Star, ChevronRight, BookOpen, Loader2, RotateCcw,
+  Flame, Star, ChevronRight, Loader2, RotateCcw,
   Home as HomeIcon, Settings, ImageOff,
   FileSpreadsheet, Volume2
 } from "lucide-react";
@@ -28,8 +28,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const emptyProgress = () => ({ level: 0, dueAt: 0, lastReview: 0 });
 const DRIVE_IMAGE_SIZE = "w1000";
-const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1NbV4QywhVxkT8iOs11CSM-12llyQhrtdVj0Gvs8dO84/edit?usp=drive_link";
-const DEFAULT_SHEET_DOWNLOAD_URL = normalizeSheetUrl(DEFAULT_SHEET_URL);
+const DEFAULT_EXCEL_URL = `${import.meta.env.BASE_URL}review.xlsx`;
+const DEFAULT_SHEET_DOWNLOAD_URL = DEFAULT_EXCEL_URL;
+const CONTENT_IMPORTED_KEY = "content-imported";
 
 function getGoogleDriveFileId(url) {
   try {
@@ -307,15 +308,43 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const idxRaw = await safeGet("lesson-index", true);
-      const idx = idxRaw ? JSON.parse(idxRaw) : [];
+      let idx = idxRaw ? JSON.parse(idxRaw) : [];
       const statsRaw = await safeGet("stats", false);
       const st = statsRaw ? JSON.parse(statsRaw) : { xp: 0, reviewDates: [] };
+      const importedRaw = await safeGet(CONTENT_IMPORTED_KEY, true);
 
-      const loaded = {};
+      let loaded = {};
       for (const meta of idx) {
         const raw = await safeGet("lesson:" + meta.id, true);
         if (raw) loaded[meta.id] = JSON.parse(raw);
       }
+
+      if (idx.length === 0 && !importedRaw) {
+        try {
+          const response = await fetch(DEFAULT_EXCEL_URL, { cache: "no-cache" });
+          if (!response.ok) throw new Error("Default Excel not found");
+          const rows = parseSheetBuffer(
+            await response.arrayBuffer(),
+            "review.xlsx",
+            response.headers.get("content-type") || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          );
+          const { index: defaultIndex, lessonsMap } = buildContentFromRows(rows);
+          if (defaultIndex.length > 0) {
+            for (const l of Object.values(lessonsMap)) {
+              await safeSet("lesson:" + l.id, JSON.stringify(l), true);
+            }
+            await safeSet("lesson-index", JSON.stringify(defaultIndex), true);
+            await safeSet(CONTENT_IMPORTED_KEY, "true", true);
+            idx = defaultIndex;
+            loaded = lessonsMap;
+          }
+        } catch {
+          // Keep the app usable; settings still allows manual import.
+        }
+      } else if (idx.length > 0 && !importedRaw) {
+        await safeSet(CONTENT_IMPORTED_KEY, "true", true);
+      }
+
       setIndex(idx);
       setLessons(loaded);
       setStats(st);
@@ -357,6 +386,7 @@ export default function App() {
       await safeSet("lesson:" + l.id, JSON.stringify(l), true);
     }
     await safeSet("lesson-index", JSON.stringify(newIndex), true);
+    await safeSet(CONTENT_IMPORTED_KEY, "true", true);
     setIndex(newIndex);
     setLessons(newLessons);
     return newIndex;
@@ -418,7 +448,8 @@ export default function App() {
             {screen.name === "home" && (
               <Home
                 index={index}
-                onOpen={(id) => setScreen({ name: "lesson", id })}
+                perfectByLesson={stats.perfectByLesson || {}}
+                onOpen={(id) => setScreen({ name: "review", id })}
               />
             )}
             {screen.name === "settings" && (
@@ -445,14 +476,18 @@ export default function App() {
                   await persistProgress(screen.id, nextProgress);
                   const dates = new Set(stats.reviewDates || []);
                   dates.add(todayStr());
-                  await persistStats({ xp: (stats.xp || 0) + result.xpEarned, reviewDates: Array.from(dates) });
+                  const perfectByLesson = { ...(stats.perfectByLesson || {}) };
+                  if (result.total > 0 && result.correct === result.total) {
+                    perfectByLesson[screen.id] = (perfectByLesson[screen.id] || 0) + 1;
+                  }
+                  await persistStats({ ...stats, xp: (stats.xp || 0) + result.xpEarned, reviewDates: Array.from(dates), perfectByLesson });
                   setScreen({ name: "summary", id: screen.id, result });
                 }}
-                onExit={() => setScreen({ name: "lesson", id: screen.id })}
+                onExit={() => setScreen({ name: "home" })}
               />
             )}
             {screen.name === "summary" && (
-              <Summary result={screen.result} onReviewAgain={() => setScreen({ name: "review", id: screen.id })} onBackToLesson={() => setScreen({ name: "lesson", id: screen.id })} onHome={() => setScreen({ name: "home" })} />
+              <Summary result={screen.result} onReviewAgain={() => setScreen({ name: "review", id: screen.id })} onHome={() => setScreen({ name: "home" })} />
             )}
           </div>
         </div>
@@ -477,7 +512,7 @@ function TopBar({ screen, setScreen, xp, streak }) {
           </button>
           {screen.name !== "home" && (
             <button
-              onClick={() => setScreen(screen.name === "summary" ? { name: "home" } : screen.name === "review" ? { name: "lesson", id: screen.id } : { name: "home" })}
+              onClick={() => setScreen({ name: "home" })}
               className="text-[#1687a7] hover:text-[#16475f]"
               aria-label="戻る"
             >
@@ -491,7 +526,7 @@ function TopBar({ screen, setScreen, xp, streak }) {
 }
 
 /* ---------------- Home ---------------- */
-function Home({ index, onOpen }) {
+function Home({ index, perfectByLesson, onOpen }) {
   return (
     <div className="pt-6">
       <p className="text-[11px] text-[#42677a] mb-5 font-mono">復習の記録(習熟度・XP)は自分だけに保存されます。</p>
@@ -505,16 +540,38 @@ function Home({ index, onOpen }) {
 
       <div className="space-y-3">
         {index.map((meta) => (
-          <button key={meta.id} onClick={() => onOpen(meta.id)} className="drawer-front w-full rounded-md p-4 flex items-center gap-4 text-left shadow-md hover:brightness-110 transition">
+          <button key={meta.id} onClick={() => onOpen(meta.id)} disabled={(meta.count || 0) < 1} className="drawer-front w-full rounded-md p-4 flex items-center gap-4 text-left shadow-md hover:brightness-110 transition disabled:opacity-50 disabled:cursor-not-allowed">
             <div className="brass rounded w-12 h-12 flex items-center justify-center text-2xl shrink-0">{meta.emoji || "📇"}</div>
             <div className="flex-1 min-w-0">
               <div className="font-display text-[#16475f] text-lg font-semibold truncate">{meta.title}</div>
               <div className="font-mono text-xs text-[#42677a]">{meta.count || 0} 枚のカード</div>
+              <PerfectBadges count={perfectByLesson[meta.id] || 0} />
             </div>
             <ChevronRight className="text-[#1687a7]" size={20} />
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+function PerfectBadges({ count }) {
+  if (!count) return null;
+  const visible = Math.min(count, 5);
+  const medalFor = (index) => (index === 0 ? "🥉" : index === 1 ? "🥈" : "🥇");
+  const labelFor = (index) => (index === 0 ? "銅メダル" : index === 1 ? "銀メダル" : "金メダル");
+  return (
+    <div className="mt-2 flex items-center gap-1.5" aria-label={`全問正解 ${count}回`}>
+      {Array.from({ length: visible }).map((_, index) => (
+        <span
+          key={index}
+          title={labelFor(index)}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/80 bg-white text-[17px] shadow-md ring-1 ring-[#b7d6e6]"
+        >
+          {medalFor(index)}
+        </span>
+      ))}
+      {count > visible && <span className="rounded-full bg-[#d7f5eb] px-2 py-0.5 font-mono text-[10px] font-bold text-[#16805d]">+{count - visible}</span>}
     </div>
   );
 }
@@ -896,14 +953,8 @@ function MasteryDots({ level }) {
 }
 
 /* ---------------- Review Session ---------------- */
-function buildQueue(lesson, progress) {
-  const now = Date.now();
-  const getProg = (c) => progress[c.id] || emptyProgress();
-  const due = lesson.cards.filter((c) => (getProg(c).dueAt || 0) <= now);
-  const pool = due.length > 0 ? due : [...lesson.cards].sort((a, b) => (getProg(a).lastReview || 0) - (getProg(b).lastReview || 0));
-  const size = Math.min(10, Math.max(pool.length, Math.min(5, lesson.cards.length)));
-  const shuffled = [...pool].sort(() => Math.random() - 0.5).slice(0, size);
-  return shuffled.length > 0 ? shuffled : [...lesson.cards].sort(() => Math.random() - 0.5).slice(0, Math.min(10, lesson.cards.length));
+function buildQueue(lesson) {
+  return [...lesson.cards];
 }
 function makeQuestion(card, allCards) {
   if (card.worksheetLines?.length) return { card, type: "worksheet", choices: [] };
@@ -918,7 +969,7 @@ function cardLabel(card) {
 }
 
 function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) {
-  const queue = useRef(buildQueue(lesson, initialProgress));
+  const queue = useRef(buildQueue(lesson));
   const [qIndex, setQIndex] = useState(0);
   const [question, setQuestion] = useState(() => makeQuestion(queue.current[0], allCards));
   const [selected, setSelected] = useState(null);
@@ -1015,7 +1066,7 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
 }
 
 /* ---------------- Summary ---------------- */
-function Summary({ result, onReviewAgain, onBackToLesson, onHome }) {
+function Summary({ result, onReviewAgain, onHome }) {
   const pct = result.total > 0 ? Math.round((result.correct / result.total) * 100) : 0;
   return (
     <div className="pt-10 text-center slide-up">
@@ -1024,8 +1075,7 @@ function Summary({ result, onReviewAgain, onBackToLesson, onHome }) {
       <p className="text-[#1687a7] mb-6 font-mono text-sm">{result.correct} / {result.total} 正解（{pct}%）・ +{result.xpEarned} XP</p>
       <div className="flex flex-col gap-3 max-w-xs mx-auto">
         <button onClick={onReviewAgain} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#16805d] text-[#ffffff] font-display font-bold hover:brightness-110 transition"><RotateCcw size={18} /> もう一度復習する</button>
-        <button onClick={onBackToLesson} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#1687a7] text-[#ffffff] font-display font-semibold hover:brightness-110 transition"><BookOpen size={18} /> カード一覧に戻る</button>
-        <button onClick={onHome} className="rounded-md py-2 flex items-center justify-center gap-2 text-[#1687a7] hover:text-[#16475f] transition"><HomeIcon size={16} /> 引き出し一覧へ</button>
+        <button onClick={onHome} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#1687a7] text-[#ffffff] font-display font-semibold hover:brightness-110 transition"><HomeIcon size={16} /> レッスン一覧へ</button>
       </div>
     </div>
   );
