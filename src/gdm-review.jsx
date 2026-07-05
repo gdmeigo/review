@@ -28,8 +28,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const emptyProgress = () => ({ level: 0, dueAt: 0, lastReview: 0 });
 const DRIVE_IMAGE_SIZE = "w1000";
-const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/1NbV4QywhVxkT8iOs11CSM-12llyQhrtdVj0Gvs8dO84/edit?usp=drive_link";
-const DEFAULT_SHEET_DOWNLOAD_URL = normalizeSheetUrl(DEFAULT_SHEET_URL);
+const DEFAULT_EXCEL_URL = `${import.meta.env.BASE_URL}review.xlsx`;
+const DEFAULT_SHEET_DOWNLOAD_URL = DEFAULT_EXCEL_URL;
+const CONTENT_IMPORTED_KEY = "content-imported";
 
 function getGoogleDriveFileId(url) {
   try {
@@ -307,15 +308,43 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const idxRaw = await safeGet("lesson-index", true);
-      const idx = idxRaw ? JSON.parse(idxRaw) : [];
+      let idx = idxRaw ? JSON.parse(idxRaw) : [];
       const statsRaw = await safeGet("stats", false);
       const st = statsRaw ? JSON.parse(statsRaw) : { xp: 0, reviewDates: [] };
+      const importedRaw = await safeGet(CONTENT_IMPORTED_KEY, true);
 
-      const loaded = {};
+      let loaded = {};
       for (const meta of idx) {
         const raw = await safeGet("lesson:" + meta.id, true);
         if (raw) loaded[meta.id] = JSON.parse(raw);
       }
+
+      if (idx.length === 0 && !importedRaw) {
+        try {
+          const response = await fetch(DEFAULT_EXCEL_URL, { cache: "no-cache" });
+          if (!response.ok) throw new Error("Default Excel not found");
+          const rows = parseSheetBuffer(
+            await response.arrayBuffer(),
+            "review.xlsx",
+            response.headers.get("content-type") || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          );
+          const { index: defaultIndex, lessonsMap } = buildContentFromRows(rows);
+          if (defaultIndex.length > 0) {
+            for (const l of Object.values(lessonsMap)) {
+              await safeSet("lesson:" + l.id, JSON.stringify(l), true);
+            }
+            await safeSet("lesson-index", JSON.stringify(defaultIndex), true);
+            await safeSet(CONTENT_IMPORTED_KEY, "true", true);
+            idx = defaultIndex;
+            loaded = lessonsMap;
+          }
+        } catch {
+          // Keep the app usable; settings still allows manual import.
+        }
+      } else if (idx.length > 0 && !importedRaw) {
+        await safeSet(CONTENT_IMPORTED_KEY, "true", true);
+      }
+
       setIndex(idx);
       setLessons(loaded);
       setStats(st);
@@ -357,6 +386,7 @@ export default function App() {
       await safeSet("lesson:" + l.id, JSON.stringify(l), true);
     }
     await safeSet("lesson-index", JSON.stringify(newIndex), true);
+    await safeSet(CONTENT_IMPORTED_KEY, "true", true);
     setIndex(newIndex);
     setLessons(newLessons);
     return newIndex;
@@ -528,14 +558,20 @@ function Home({ index, perfectByLesson, onOpen }) {
 function PerfectBadges({ count }) {
   if (!count) return null;
   const visible = Math.min(count, 5);
+  const medalFor = (index) => (index === 0 ? "🥉" : index === 1 ? "🥈" : "🥇");
+  const labelFor = (index) => (index === 0 ? "銅メダル" : index === 1 ? "銀メダル" : "金メダル");
   return (
-    <div className="mt-2 flex items-center gap-1" aria-label={`全問正解 ${count}回`}>
+    <div className="mt-2 flex items-center gap-1.5" aria-label={`全問正解 ${count}回`}>
       {Array.from({ length: visible }).map((_, index) => (
-        <span key={index} className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#d7f5eb] text-[12px] text-[#16805d] shadow-sm">
-          ✓
+        <span
+          key={index}
+          title={labelFor(index)}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/80 bg-white text-[17px] shadow-md ring-1 ring-[#b7d6e6]"
+        >
+          {medalFor(index)}
         </span>
       ))}
-      {count > visible && <span className="font-mono text-[10px] text-[#16805d]">+{count - visible}</span>}
+      {count > visible && <span className="rounded-full bg-[#d7f5eb] px-2 py-0.5 font-mono text-[10px] font-bold text-[#16805d]">+{count - visible}</span>}
     </div>
   );
 }
