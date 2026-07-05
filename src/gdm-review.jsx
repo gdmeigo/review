@@ -3,7 +3,7 @@ import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import {
   ArrowLeft, Check, X, Play,
-  Flame, Star, ChevronRight, BookOpen, Loader2, RotateCcw,
+  Flame, Star, ChevronRight, Loader2, RotateCcw,
   Home as HomeIcon, Settings, ImageOff,
   FileSpreadsheet, Volume2
 } from "lucide-react";
@@ -418,7 +418,7 @@ export default function App() {
             {screen.name === "home" && (
               <Home
                 index={index}
-                onOpen={(id) => setScreen({ name: "lesson", id })}
+                onOpen={(id) => setScreen({ name: "review", id })}
               />
             )}
             {screen.name === "settings" && (
@@ -448,11 +448,11 @@ export default function App() {
                   await persistStats({ xp: (stats.xp || 0) + result.xpEarned, reviewDates: Array.from(dates) });
                   setScreen({ name: "summary", id: screen.id, result });
                 }}
-                onExit={() => setScreen({ name: "lesson", id: screen.id })}
+                onExit={() => setScreen({ name: "home" })}
               />
             )}
             {screen.name === "summary" && (
-              <Summary result={screen.result} onReviewAgain={() => setScreen({ name: "review", id: screen.id })} onBackToLesson={() => setScreen({ name: "lesson", id: screen.id })} onHome={() => setScreen({ name: "home" })} />
+              <Summary result={screen.result} onReviewAgain={() => setScreen({ name: "review", id: screen.id })} onHome={() => setScreen({ name: "home" })} />
             )}
           </div>
         </div>
@@ -477,7 +477,7 @@ function TopBar({ screen, setScreen, xp, streak }) {
           </button>
           {screen.name !== "home" && (
             <button
-              onClick={() => setScreen(screen.name === "summary" ? { name: "home" } : screen.name === "review" ? { name: "lesson", id: screen.id } : { name: "home" })}
+              onClick={() => setScreen({ name: "home" })}
               className="text-[#1687a7] hover:text-[#16475f]"
               aria-label="戻る"
             >
@@ -505,7 +505,7 @@ function Home({ index, onOpen }) {
 
       <div className="space-y-3">
         {index.map((meta) => (
-          <button key={meta.id} onClick={() => onOpen(meta.id)} className="drawer-front w-full rounded-md p-4 flex items-center gap-4 text-left shadow-md hover:brightness-110 transition">
+          <button key={meta.id} onClick={() => onOpen(meta.id)} disabled={(meta.count || 0) < 1} className="drawer-front w-full rounded-md p-4 flex items-center gap-4 text-left shadow-md hover:brightness-110 transition disabled:opacity-50 disabled:cursor-not-allowed">
             <div className="brass rounded w-12 h-12 flex items-center justify-center text-2xl shrink-0">{meta.emoji || "📇"}</div>
             <div className="flex-1 min-w-0">
               <div className="font-display text-[#16475f] text-lg font-semibold truncate">{meta.title}</div>
@@ -1009,7 +1009,7 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
 }
 
 /* ---------------- Summary ---------------- */
-function Summary({ result, onReviewAgain, onBackToLesson, onHome }) {
+function Summary({ result, onReviewAgain, onHome }) {
   const pct = result.total > 0 ? Math.round((result.correct / result.total) * 100) : 0;
   return (
     <div className="pt-10 text-center slide-up">
@@ -1018,8 +1018,7 @@ function Summary({ result, onReviewAgain, onBackToLesson, onHome }) {
       <p className="text-[#1687a7] mb-6 font-mono text-sm">{result.correct} / {result.total} 正解（{pct}%）・ +{result.xpEarned} XP</p>
       <div className="flex flex-col gap-3 max-w-xs mx-auto">
         <button onClick={onReviewAgain} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#16805d] text-[#ffffff] font-display font-bold hover:brightness-110 transition"><RotateCcw size={18} /> もう一度復習する</button>
-        <button onClick={onBackToLesson} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#1687a7] text-[#ffffff] font-display font-semibold hover:brightness-110 transition"><BookOpen size={18} /> カード一覧に戻る</button>
-        <button onClick={onHome} className="rounded-md py-2 flex items-center justify-center gap-2 text-[#1687a7] hover:text-[#16475f] transition"><HomeIcon size={16} /> 引き出し一覧へ</button>
+        <button onClick={onHome} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#1687a7] text-[#ffffff] font-display font-semibold hover:brightness-110 transition"><HomeIcon size={16} /> レッスン一覧へ</button>
       </div>
     </div>
   );
