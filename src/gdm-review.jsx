@@ -654,10 +654,19 @@ function SheetSyncPanel({ sheetUrl, onSaveSheetUrl, onSyncSheet, onImportRows })
   const [status, setStatus] = useState(null);
   const [confirming, setConfirming] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
+  const driveFileId = getGoogleDriveFileId(url);
+  const driveDownloadUrl = driveFileId ? normalizeSheetUrl(url) : "";
 
   const doSync = async () => {
     setConfirming(false);
     if (!url.trim()) return;
+    if (driveDownloadUrl) {
+      setStatus({
+        type: "error",
+        message: "Google Driveのファイル共有URLはブラウザから直接取得できません。下のリンクでCSVを保存してから、ファイル選択で読み込んでください。",
+      });
+      return;
+    }
     setStatus({ type: "loading", message: "読み込み中…" });
     try {
       await onSaveSheetUrl(url.trim());
@@ -713,6 +722,17 @@ function SheetSyncPanel({ sheetUrl, onSaveSheetUrl, onSyncSheet, onImportRows })
           className="flex-1 rounded border border-[#c9bb9a] bg-white/60 px-3 py-2 text-sm font-mono"
         />
       </div>
+      {driveDownloadUrl && (
+        <a
+          href={driveDownloadUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="mb-2 w-full rounded-md py-2 flex items-center justify-center gap-2 border border-[#8C6425] text-[#6b5d44] font-display font-semibold hover:bg-white/30"
+        >
+          <FileSpreadsheet size={16} />
+          DriveのCSVをダウンロードする
+        </a>
+      )}
       {!confirming ? (
         <button
           disabled={!url.trim() || status?.type === "loading"}
