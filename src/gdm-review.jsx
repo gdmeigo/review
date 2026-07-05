@@ -165,33 +165,37 @@ function isExcelBuffer(buffer) {
   return bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
 }
 
-async function fetchAndParseSheet(url) {
-  const fetchUrl = normalizeSheetUrl(url);
-  const res = await fetch(fetchUrl, { mode: "cors" });
-  if (!res.ok) throw new Error("http " + res.status);
-
-  const lower = url.toLowerCase().split("?")[0];
-  const contentType = (res.headers.get("content-type") || "").toLowerCase();
-  const buf = await res.arrayBuffer();
+function parseSheetBuffer(buffer, sourceName = "", contentType = "") {
+  const lower = sourceName.toLowerCase().split("?")[0];
+  const type = (contentType || "").toLowerCase();
   const looksLikeExcel =
     lower.endsWith(".xlsx") ||
     lower.endsWith(".xls") ||
-    contentType.includes("spreadsheet") ||
-    contentType.includes("excel") ||
-    isExcelBuffer(buf);
+    type.includes("spreadsheet") ||
+    type.includes("excel") ||
+    isExcelBuffer(buffer);
 
   if (looksLikeExcel) {
-    const wb = XLSX.read(buf, { type: "array" });
+    const wb = XLSX.read(buffer, { type: "array" });
     const sheet = wb.Sheets[wb.SheetNames[0]];
     return XLSX.utils.sheet_to_json(sheet, { defval: "" });
   }
 
-  const text = new TextDecoder("utf-8").decode(buf).replace(/^\uFEFF/, "");
+  const text = new TextDecoder("utf-8").decode(buffer).replace(/^\uFEFF/, "");
   const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
   if (parsed.errors.length > 0) {
     throw new Error(parsed.errors[0].message || "CSV parse failed");
   }
   return parsed.data;
+}
+
+async function fetchAndParseSheet(url) {
+  const fetchUrl = normalizeSheetUrl(url);
+  const res = await fetch(fetchUrl, { mode: "cors" });
+  if (!res.ok) throw new Error("http " + res.status);
+
+  const buf = await res.arrayBuffer();
+  return parseSheetBuffer(buf, url, res.headers.get("content-type") || "");
 }
 
 export default function App() {
@@ -369,8 +373,7 @@ export default function App() {
     setSheetUrl(url);
     await safeSet("sheet-url", url, true);
   };
-  const syncFromSheet = async (url) => {
-    const rows = await fetchAndParseSheet(url);
+  const importRows = async (rows) => {
     const { index: newIndex, lessonsMap: newLessons } = buildContentFromRows(rows);
     if (newIndex.length === 0) {
       throw new Error("CSVに english 列のカードが見つかりませんでした");
@@ -385,6 +388,10 @@ export default function App() {
     setIndex(newIndex);
     setLessons(newLessons);
     return newIndex;
+  };
+  const syncFromSheet = async (url) => {
+    const rows = await fetchAndParseSheet(url);
+    return importRows(rows);
   };
 
   const allCardsFlat = useMemo(
@@ -447,6 +454,7 @@ export default function App() {
                 sheetUrl={sheetUrl}
                 onSaveSheetUrl={saveSheetUrl}
                 onSyncSheet={syncFromSheet}
+                onImportRows={importRows}
                 onOpen={(id) => setScreen({ name: "lesson", id })}
                 onCreate={async (title, emoji) => {
                   const id = await createLesson(title, emoji);
@@ -580,7 +588,7 @@ function PinModal({ mode, onCancel, onSubmitSetup, onSubmitEnter }) {
 }
 
 /* ---------------- Home ---------------- */
-function Home({ index, isEditor, sheetUrl, onSaveSheetUrl, onSyncSheet, onOpen, onCreate }) {
+function Home({ index, isEditor, sheetUrl, onSaveSheetUrl, onSyncSheet, onImportRows, onOpen, onCreate }) {
   const [showAdd, setShowAdd] = useState(false);
   return (
     <div className="pt-6">
@@ -616,7 +624,7 @@ function Home({ index, isEditor, sheetUrl, onSaveSheetUrl, onSyncSheet, onOpen, 
               <Plus size={18} /> レッスンを手動で追加
             </button>
           )}
-          <SheetSyncPanel sheetUrl={sheetUrl} onSaveSheetUrl={onSaveSheetUrl} onSyncSheet={onSyncSheet} />
+          <SheetSyncPanel sheetUrl={sheetUrl} onSaveSheetUrl={onSaveSheetUrl} onSyncSheet={onSyncSheet} onImportRows={onImportRows} />
         </>
       )}
     </div>
@@ -641,7 +649,7 @@ function AddLessonForm({ onCancel, onCreate }) {
 }
 
 /* ---------------- Sheet Sync Panel (teacher only) ---------------- */
-function SheetSyncPanel({ sheetUrl, onSaveSheetUrl, onSyncSheet }) {
+function SheetSyncPanel({ sheetUrl, onSaveSheetUrl, onSyncSheet, onImportRows }) {
   const [url, setUrl] = useState(sheetUrl || "");
   const [status, setStatus] = useState(null);
   const [confirming, setConfirming] = useState(false);
@@ -658,6 +666,19 @@ function SheetSyncPanel({ sheetUrl, onSaveSheetUrl, onSyncSheet }) {
       setStatus({ type: "success", message: `${newIndex.length}レッスン・${totalCards}枚のカードを読み込みました` });
     } catch (e) {
       setStatus({ type: "error", message: `読み込みに失敗しました: ${e?.message || "URLまたはCSV形式を確認してください"}` });
+    }
+  };
+
+  const doFileImport = async (file) => {
+    if (!file) return;
+    setStatus({ type: "loading", message: "読み込み中…" });
+    try {
+      const rows = parseSheetBuffer(await file.arrayBuffer(), file.name, file.type);
+      const newIndex = await onImportRows(rows);
+      const totalCards = newIndex.reduce((s, m) => s + (m.count || 0), 0);
+      setStatus({ type: "success", message: `${newIndex.length}レッスン・${totalCards}枚のカードを読み込みました` });
+    } catch (e) {
+      setStatus({ type: "error", message: `読み込みに失敗しました: ${e?.message || "CSVまたはExcelファイルを確認してください"}` });
     }
   };
 
@@ -710,6 +731,19 @@ function SheetSyncPanel({ sheetUrl, onSaveSheetUrl, onSyncSheet }) {
           </div>
         </div>
       )}
+      <label className="mt-2 w-full rounded-md py-2 flex items-center justify-center gap-2 border border-[#8C6425] text-[#6b5d44] font-display font-semibold cursor-pointer hover:bg-white/30">
+        <FileSpreadsheet size={16} />
+        CSV/Excelファイルを選んで読み込む
+        <input
+          type="file"
+          accept=".csv,.tsv,.txt,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+          className="hidden"
+          onChange={(e) => {
+            doFileImport(e.target.files?.[0]);
+            e.target.value = "";
+          }}
+        />
+      </label>
       {status && status.type !== "loading" && (
         <p className={`text-xs mt-2 ${status.type === "success" ? "text-[#2F6B4F]" : "text-[#a3402f]"}`}>{status.message}</p>
       )}
