@@ -123,9 +123,39 @@ function normalizeAudioUrl(url) {
 }
 function splitChoices(value) {
   return (value || "")
-    .split(/[|／/、,，]/)
+    .split(/[|／/、,，;]/)
     .map((choice) => choice.trim())
     .filter(Boolean);
+}
+function shuffleList(list) {
+  return [...list].sort(() => Math.random() - 0.5);
+}
+function parseClozeSentence(value, answerValue) {
+  const raw = value || "";
+  const answers = [];
+  const parts = [];
+  const pattern = /\{\{([^}]+)\}\}/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = pattern.exec(raw))) {
+    parts.push(raw.slice(lastIndex, match.index));
+    answers.push(match[1].trim());
+    lastIndex = match.index + match[0].length;
+  }
+  parts.push(raw.slice(lastIndex));
+  const explicitAnswers = splitChoices(answerValue);
+  if (answers.length === 0 && explicitAnswers.length > 0 && /_{2,}/.test(raw)) {
+    return {
+      sentence: raw,
+      clozeParts: raw.split(/_{2,}/),
+      answers: explicitAnswers,
+    };
+  }
+  return {
+    sentence: answers.length > 0 ? parts.join("____") : raw,
+    clozeParts: answers.length > 0 ? parts : null,
+    answers: explicitAnswers.length > 0 ? explicitAnswers : answers,
+  };
 }
 function buildContentFromRows(rows) {
   const order = [];
@@ -135,6 +165,7 @@ function buildContentFromRows(rows) {
     const en = sentence || getField(row, "en");
     const choices = splitChoices(getField(row, "choices"));
     const answer = getField(row, "answer");
+    const cloze = parseClozeSentence(en, answer);
     const audioUrl = normalizeAudioUrl(getField(row, "audio"));
     if (!en && choices.length === 0 && !answer) return;
     const title = getField(row, "lesson") || "未分類";
@@ -161,7 +192,14 @@ function buildContentFromRows(rows) {
       if (emoji && !card.emoji) card.emoji = emoji;
       if (note && !card.note) card.note = note;
       if (audioUrl && !card.audioUrl) card.audioUrl = audioUrl;
-      card.worksheetLines.push({ sentence: en, choices, answer, audioUrl, note });
+      card.worksheetLines.push({
+        sentence: cloze.sentence,
+        clozeParts: cloze.clozeParts,
+        choices,
+        answers: cloze.answers,
+        audioUrl,
+        note,
+      });
     } else {
       byTitle[title].cards.push({ en, image, emoji, note, audioUrl });
     }
@@ -674,7 +712,16 @@ function WorksheetLines({ lines, compact = false }) {
       {lines.map((line, index) => (
         <div key={index} className="text-left">
           <div className={compact ? "text-xs text-[#16475f]" : "text-sm text-[#16475f]"}>
-            {line.sentence || line.answer}
+            {line.clozeParts ? (
+              line.clozeParts.map((part, partIndex) => (
+                <span key={partIndex}>
+                  {part}
+                  {partIndex < line.clozeParts.length - 1 && <span className="inline-block min-w-12 border-b border-[#16475f] align-baseline" />}
+                </span>
+              ))
+            ) : (
+              line.sentence || line.answers?.join(" / ")
+            )}
           </div>
           {line.choices?.length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
@@ -688,6 +735,97 @@ function WorksheetLines({ lines, compact = false }) {
           {line.audioUrl && <div className="mt-1"><AudioButton src={line.audioUrl} /></div>}
         </div>
       ))}
+    </div>
+  );
+}
+
+function WorksheetQuestion({ card, selected, onSubmit }) {
+  const [fills, setFills] = useState({});
+  const lines = card.worksheetLines || [];
+  const shuffledChoicesByLine = useMemo(
+    () => lines.map((line) => shuffleList(line.choices || [])),
+    [lines]
+  );
+  const allFilled = lines.every((line, lineIndex) =>
+    (line.answers || []).every((_, blankIndex) => fills[`${lineIndex}-${blankIndex}`])
+  );
+
+  const setBlank = (lineIndex, blankIndex, choice) => {
+    if (selected) return;
+    setFills((prev) => ({ ...prev, [`${lineIndex}-${blankIndex}`]: choice }));
+  };
+
+  const isCorrect = () =>
+    lines.every((line, lineIndex) =>
+      (line.answers || []).every((answer, blankIndex) => fills[`${lineIndex}-${blankIndex}`] === answer)
+    );
+
+  return (
+    <div className="mx-auto max-w-md py-2 text-left">
+      {card.photoUrl && (
+        <div className="mb-4 flex justify-center">
+          <CardVisual card={card} className="max-h-44 max-w-full object-contain rounded" iconSize={48} />
+        </div>
+      )}
+      <div className="space-y-4">
+        {lines.map((line, lineIndex) => (
+          <div key={lineIndex}>
+            <div className="text-sm leading-8 text-[#16475f]">
+              {(line.clozeParts || [line.sentence || ""]).map((part, partIndex) => (
+                <span key={partIndex}>
+                  {part}
+                  {partIndex < (line.answers || []).length && (
+                    <span className={`mx-1 inline-flex min-w-20 items-center justify-center border-b-2 px-2 ${selected ? fills[`${lineIndex}-${partIndex}`] === line.answers[partIndex] ? "border-[#16805d] text-[#16805d]" : "border-[#b42335] text-[#b42335]" : "border-[#1687a7] text-[#16475f]"}`}>
+                      {fills[`${lineIndex}-${partIndex}`] || " "}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {(shuffledChoicesByLine[lineIndex] || []).map((choice) => (
+                <button
+                  key={choice}
+                  type="button"
+                  disabled={!!selected}
+                  onClick={() => {
+                    const nextBlank = (line.answers || []).findIndex((_, blankIndex) => !fills[`${lineIndex}-${blankIndex}`]);
+                    if (nextBlank >= 0) setBlank(lineIndex, nextBlank, choice);
+                  }}
+                  className="rounded border border-[#b7d6e6] bg-white px-2 py-1 text-xs text-[#166078] hover:bg-[#e8f7fb] disabled:opacity-70"
+                >
+                  {choice}
+                </button>
+              ))}
+              {(line.answers || []).some((_, blankIndex) => fills[`${lineIndex}-${blankIndex}`]) && !selected && (
+                <button
+                  type="button"
+                  onClick={() => setFills((prev) => {
+                    const next = { ...prev };
+                    (line.answers || []).forEach((_, blankIndex) => delete next[`${lineIndex}-${blankIndex}`]);
+                    return next;
+                  })}
+                  className="rounded px-2 py-1 text-xs text-[#42677a] underline"
+                >
+                  クリア
+                </button>
+              )}
+            </div>
+            {line.audioUrl && <div className="mt-2"><AudioButton src={line.audioUrl} /></div>}
+          </div>
+        ))}
+      </div>
+      {card.audioUrl && <div className="mt-3 flex justify-center"><AudioButton src={card.audioUrl} /></div>}
+      {!selected && (
+        <button
+          type="button"
+          disabled={!allFilled}
+          onClick={() => onSubmit(isCorrect())}
+          className="mt-5 w-full rounded-md bg-[#1687a7] py-2 font-display font-bold text-white disabled:opacity-40"
+        >
+          答える
+        </button>
+      )}
     </div>
   );
 }
@@ -910,6 +1048,7 @@ function buildQueue(lesson, progress) {
   return shuffled.length > 0 ? shuffled : [...lesson.cards].sort(() => Math.random() - 0.5).slice(0, Math.min(10, lesson.cards.length));
 }
 function makeQuestion(card, allCards) {
+  if (card.worksheetLines?.length) return { card, type: "worksheet", choices: [] };
   const type = Math.random() < 0.5 ? "pic2en" : "en2pic";
   const distractPool = allCards.filter((c) => c.id !== card.id && c.en !== card.en);
   const shuffled = [...distractPool].sort(() => Math.random() - 0.5).slice(0, 3);
@@ -931,10 +1070,9 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
 
   const total = queue.current.length;
 
-  const handleChoice = (choice) => {
+  const recordAnswer = (isCorrect, choiceId = question.card.id) => {
     if (selected) return;
-    const isCorrect = choice.id === question.card.id;
-    setSelected({ choiceId: choice.id, isCorrect });
+    setSelected({ choiceId, isCorrect });
 
     const now = Date.now();
     const prevLevel = (initialProgress[question.card.id] || emptyProgress()).level;
@@ -944,6 +1082,9 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
     const dueAt = now + INTERVAL_DAYS[newLevel] * DAY_MS;
     setUpdates((u) => [...u.filter((x) => x.id !== question.card.id), { id: question.card.id, level: newLevel, dueAt, lastReview: now }]);
     if (isCorrect) { setCorrectCount((n) => n + 1); setXp((x) => x + 10); }
+  };
+  const handleChoice = (choice) => {
+    recordAnswer(choice.id === question.card.id, choice.id);
   };
 
   const handleNext = () => {
@@ -968,39 +1109,38 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
 
       <div className="card-paper rounded-md border border-[#b7d6e6] p-6 mb-5 text-center relative">
         <div className="punch-hole absolute -top-2 left-1/2 -translate-x-1/2" />
-        {q.type === "pic2en" ? (
+        {q.type === "worksheet" ? (
+          <WorksheetQuestion card={q.card} selected={selected} onSubmit={(isCorrect) => recordAnswer(isCorrect)} />
+        ) : q.type === "pic2en" ? (
           <div className="flex items-center justify-center min-h-[110px]">
             <CardVisual card={q.card} className="max-h-32 max-w-[220px] object-contain rounded text-7xl" iconSize={64} />
-          </div>
-        ) : q.card.worksheetLines?.length ? (
-          <div className="mx-auto max-w-md py-2">
-            <WorksheetLines lines={q.card.worksheetLines} />
-            {q.card.audioUrl && <div className="mt-2 flex justify-center"><AudioButton src={q.card.audioUrl} /></div>}
           </div>
         ) : (
           <div className="font-display text-2xl font-bold text-[#16475f] py-4 border-b-2 border-[#b7d6e6] inline-block px-4">{q.card.en}</div>
         )}
       </div>
 
-      <div className={`grid gap-3 ${q.choices.length > 2 ? "grid-cols-2" : "grid-cols-1"}`}>
-        {q.choices.map((choice) => {
-          const isThisSelected = selected?.choiceId === choice.id;
-          const isAnswer = choice.id === q.card.id;
-          let cls = "bg-white/70 border-[#b7d6e6] text-[#16475f] hover:bg-white";
-          if (selected) {
-            if (isAnswer) cls = "bg-[#dcefe2] border-[#16805d] text-[#1e4632]";
-            else if (isThisSelected) cls = "bg-[#fff1f3] border-[#b42335] text-[#b42335]";
-            else cls = "bg-white/30 border-[#b7d6e6] text-[#6b8794] opacity-60";
-          }
-          return (
-            <button key={choice.id} onClick={() => handleChoice(choice)} disabled={!!selected} className={`rounded-md border-2 p-4 flex items-center justify-center gap-2 font-display font-semibold text-lg transition min-h-[64px] ${cls}`}>
-              {selected && isAnswer && <Check size={18} className="stamp shrink-0" />}
-              {selected && isThisSelected && !isAnswer && <X size={18} className="stamp shrink-0" />}
-              {q.type === "pic2en" ? cardLabel(choice) : <CardVisual card={choice} className="max-h-14 max-w-[90px] object-contain text-3xl" iconSize={28} />}
-            </button>
-          );
-        })}
-      </div>
+      {q.type !== "worksheet" && (
+        <div className={`grid gap-3 ${q.choices.length > 2 ? "grid-cols-2" : "grid-cols-1"}`}>
+          {q.choices.map((choice) => {
+            const isThisSelected = selected?.choiceId === choice.id;
+            const isAnswer = choice.id === q.card.id;
+            let cls = "bg-white/70 border-[#b7d6e6] text-[#16475f] hover:bg-white";
+            if (selected) {
+              if (isAnswer) cls = "bg-[#dcefe2] border-[#16805d] text-[#1e4632]";
+              else if (isThisSelected) cls = "bg-[#fff1f3] border-[#b42335] text-[#b42335]";
+              else cls = "bg-white/30 border-[#b7d6e6] text-[#6b8794] opacity-60";
+            }
+            return (
+              <button key={choice.id} onClick={() => handleChoice(choice)} disabled={!!selected} className={`rounded-md border-2 p-4 flex items-center justify-center gap-2 font-display font-semibold text-lg transition min-h-[64px] ${cls}`}>
+                {selected && isAnswer && <Check size={18} className="stamp shrink-0" />}
+                {selected && isThisSelected && !isAnswer && <X size={18} className="stamp shrink-0" />}
+                {q.type === "pic2en" ? cardLabel(choice) : <CardVisual card={choice} className="max-h-14 max-w-[90px] object-contain text-3xl" iconSize={28} />}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {selected && (
         <div className="mt-5 slide-up">
