@@ -2,10 +2,10 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import {
-  Plus, Trash2, Pencil, ArrowLeft, Check, X, Play,
+  ArrowLeft, Check, X, Play,
   Flame, Star, ChevronRight, BookOpen, Loader2, RotateCcw,
-  Home as HomeIcon, Settings, Smile, ImageOff,
-  FileSpreadsheet, Link as LinkIcon, Volume2
+  Home as HomeIcon, Settings, ImageOff,
+  FileSpreadsheet, Volume2
 } from "lucide-react";
 
 /* ---------------------------------------------------------
@@ -25,7 +25,6 @@ const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Fraun
 
 const INTERVAL_DAYS = [0, 1, 2, 4, 7, 14]; // by mastery level 0-5
 const DAY_MS = 24 * 60 * 60 * 1000;
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const emptyProgress = () => ({ level: 0, dueAt: 0, lastReview: 0 });
 const DRIVE_IMAGE_SIZE = "w1000";
@@ -83,15 +82,6 @@ function normalizeSheetUrl(url) {
 
   return trimmed;
 }
-
-const EMOJI_BANK = {
-  "人": ["🧑", "👦", "👧", "👨", "👩", "👴", "👵", "🧑‍🏫", "🧑‍🎓", "👶"],
-  "もの": ["📕", "✏️", "🖊️", "🪑", "🚪", "🪟", "🗝️", "🕰️", "🍎", "🍞", "🥛", "☕", "🎩", "👞", "🪆", "✉️"],
-  "場所": ["🏠", "🏫", "🌳", "🛣️", "🌉", "🏞️", "🚉", "🏢"],
-  "動作": ["🚶", "🏃", "🖐️", "👉", "🤲", "🪑", "📖", "✍️", "🍽️", "🚪", "🎁", "🤝"],
-  "位置/前置詞": ["⬆️", "⬇️", "⬅️", "➡️", "🔼", "🔽", "🔁", "↔️", "🕳️", "📦"],
-  "数": ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"],
-};
 
 /* ---------------- spreadsheet import helpers ---------------- */
 const FIELD_ALIASES = {
@@ -346,49 +336,6 @@ export default function App() {
     await safeSet("progress:" + lessonId, JSON.stringify(prog), false);
   }, []);
 
-  // ---- lesson / card mutations ----
-  const updateLessonMeta = async (id, title, emoji) => {
-    const lesson = { ...lessons[id], title, emoji };
-    setLessons((prev) => ({ ...prev, [id]: lesson }));
-    await safeSet("lesson:" + id, JSON.stringify(lesson), true);
-    const newIdx = index.map((m) => (m.id === id ? { ...m, title, emoji } : m));
-    setIndex(newIdx);
-    await safeSet("lesson-index", JSON.stringify(newIdx), true);
-  };
-  const deleteLesson = async (id) => {
-    await safeDelete("lesson:" + id, true);
-    await safeDelete("progress:" + id, false);
-    const newIdx = index.filter((m) => m.id !== id);
-    setIndex(newIdx);
-    await safeSet("lesson-index", JSON.stringify(newIdx), true);
-    setLessons((prev) => {
-      const n = { ...prev };
-      delete n[id];
-      return n;
-    });
-  };
-  const upsertCard = async (lessonId, card) => {
-    const lesson = lessons[lessonId];
-    const exists = lesson.cards.some((c) => c.id === card.id);
-    const cards = exists ? lesson.cards.map((c) => (c.id === card.id ? card : c)) : [...lesson.cards, card];
-    const updated = { ...lesson, cards };
-    setLessons((prev) => ({ ...prev, [lessonId]: updated }));
-    await safeSet("lesson:" + lessonId, JSON.stringify(updated), true);
-    const newIdx = index.map((m) => (m.id === lessonId ? { ...m, count: cards.length } : m));
-    setIndex(newIdx);
-    await safeSet("lesson-index", JSON.stringify(newIdx), true);
-  };
-  const deleteCard = async (lessonId, cardId) => {
-    const lesson = lessons[lessonId];
-    const cards = lesson.cards.filter((c) => c.id !== cardId);
-    const updated = { ...lesson, cards };
-    setLessons((prev) => ({ ...prev, [lessonId]: updated }));
-    await safeSet("lesson:" + lessonId, JSON.stringify(updated), true);
-    const newIdx = index.map((m) => (m.id === lessonId ? { ...m, count: cards.length } : m));
-    setIndex(newIdx);
-    await safeSet("lesson-index", JSON.stringify(newIdx), true);
-  };
-
   // ---- spreadsheet sync ----
   const importRows = async (rows) => {
     const { index: newIndex, lessonsMap: newLessons } = buildContentFromRows(rows);
@@ -470,17 +417,9 @@ export default function App() {
             {screen.name === "lesson" && lessons[screen.id] && (
               <LessonDetail
                 lesson={lessons[screen.id]}
-                isEditor={true}
                 progress={progressByLesson[screen.id]}
                 onEnsureProgress={() => loadProgress(screen.id)}
                 onBack={() => setScreen({ name: "home" })}
-                onUpdateMeta={(t, e) => updateLessonMeta(screen.id, t, e)}
-                onDeleteLesson={async () => {
-                  await deleteLesson(screen.id);
-                  setScreen({ name: "home" });
-                }}
-                onUpsertCard={(card) => upsertCard(screen.id, card)}
-                onDeleteCard={(cid) => deleteCard(screen.id, cid)}
                 onStartReview={() => setScreen({ name: "review", id: screen.id })}
               />
             )}
@@ -815,14 +754,7 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
 }
 
 /* ---------------- Lesson Detail ---------------- */
-function LessonDetail({ lesson, isEditor, progress, onEnsureProgress, onBack, onUpdateMeta, onDeleteLesson, onUpsertCard, onDeleteCard, onStartReview }) {
-  const [editingMeta, setEditingMeta] = useState(false);
-  const [title, setTitle] = useState(lesson.title);
-  const [emoji, setEmoji] = useState(lesson.emoji);
-  const [showCardForm, setShowCardForm] = useState(false);
-  const [editingCard, setEditingCard] = useState(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-
+function LessonDetail({ lesson, progress, onEnsureProgress, onBack, onStartReview }) {
   useEffect(() => {
     onEnsureProgress();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -837,36 +769,13 @@ function LessonDetail({ lesson, isEditor, progress, onEnsureProgress, onBack, on
       </button>
 
       <div className="card-paper rounded-md p-4 border border-[#b7d6e6] mb-4">
-        {editingMeta ? (
-          <div className="flex gap-3">
-            <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 2))} className="w-12 h-12 text-xl text-center rounded border border-[#b7d6e6]" />
-            <input value={title} onChange={(e) => setTitle(e.target.value)} className="flex-1 rounded border border-[#b7d6e6] px-3 font-display" />
-            <button onClick={() => { onUpdateMeta(title.trim() || lesson.title, emoji || lesson.emoji); setEditingMeta(false); }} className="px-3 rounded bg-[#1687a7] text-[#ffffff] text-sm">保存</button>
+        <div className="flex items-center gap-3">
+          <div className="brass rounded w-11 h-11 flex items-center justify-center text-xl shrink-0">{lesson.emoji}</div>
+          <div className="flex-1">
+            <div className="font-display text-xl font-bold text-[#16475f]">{lesson.title}</div>
+            <div className="font-mono text-xs text-[#42677a]">{lesson.cards.length} 枚</div>
           </div>
-        ) : (
-          <div className="flex items-center gap-3">
-            <div className="brass rounded w-11 h-11 flex items-center justify-center text-xl shrink-0">{lesson.emoji}</div>
-            <div className="flex-1">
-              <div className="font-display text-xl font-bold text-[#16475f]">{lesson.title}</div>
-              <div className="font-mono text-xs text-[#42677a]">{lesson.cards.length} 枚</div>
-            </div>
-            {isEditor && (
-              <>
-                <button onClick={() => setEditingMeta(true)} className="text-[#42677a] hover:text-[#16475f]" aria-label="レッスン名を編集"><Pencil size={16} /></button>
-                <button onClick={() => setConfirmDelete(true)} className="text-[#b42335] hover:text-[#b42335]" aria-label="レッスンを削除"><Trash2 size={16} /></button>
-              </>
-            )}
-          </div>
-        )}
-        {confirmDelete && (
-          <div className="mt-3 text-sm bg-[#fff1f3] border border-[#f0b8c0] rounded p-2 flex items-center justify-between">
-            <span className="text-[#b42335]">このレッスンを削除しますか？カードもすべて消えます。</span>
-            <div className="flex gap-2 shrink-0 ml-2">
-              <button onClick={() => setConfirmDelete(false)} className="text-[#42677a]">やめる</button>
-              <button onClick={onDeleteLesson} className="text-[#b42335] font-semibold">削除</button>
-            </div>
-          </div>
-        )}
+        </div>
       </div>
 
       <button onClick={onStartReview} disabled={lesson.cards.length < 2} className="w-full mb-5 rounded-md py-3 flex items-center justify-center gap-2 bg-[#16805d] text-[#ffffff] font-display font-bold text-lg shadow-md disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition">
@@ -893,28 +802,9 @@ function LessonDetail({ lesson, isEditor, progress, onEnsureProgress, onBack, on
               )}
             </div>
             <MasteryDots level={(prog[c.id] || emptyProgress()).level} />
-            {isEditor && (
-              <>
-                <button onClick={() => setEditingCard(c)} className="text-[#42677a] hover:text-[#16475f]" aria-label="編集"><Pencil size={15} /></button>
-                <button onClick={() => onDeleteCard(c.id)} className="text-[#b42335] hover:text-[#b42335]" aria-label="削除"><Trash2 size={15} /></button>
-              </>
-            )}
           </div>
         ))}
       </div>
-
-      {isEditor &&
-        (showCardForm || editingCard ? (
-          <CardForm
-            initial={editingCard}
-            onCancel={() => { setShowCardForm(false); setEditingCard(null); }}
-            onSave={(card) => { onUpsertCard(card); setShowCardForm(false); setEditingCard(null); }}
-          />
-        ) : (
-          <button onClick={() => setShowCardForm(true)} className="w-full rounded-md p-3 flex items-center justify-center gap-2 border-2 border-dashed border-[#73bfd7] text-[#1687a7] hover:text-[#16475f] hover:border-[#1687a7] hover:bg-[#e8f7fb] transition">
-            <Plus size={16} /> カードを手動で追加
-          </button>
-        ))}
     </div>
   );
 }
@@ -923,100 +813,6 @@ function MasteryDots({ level }) {
   return (
     <div className="hidden sm:flex gap-0.5 mr-1" aria-label={`習熟度 ${level}/5`}>
       {[0, 1, 2, 3, 4].map((i) => <div key={i} className={`w-1.5 h-1.5 rounded-full ${i < level ? "bg-[#16805d]" : "bg-[#b7d6e6]"}`} />)}
-    </div>
-  );
-}
-
-/* ---------------- Card Form (manual add, image = URL only) ---------------- */
-function CardForm({ initial, onCancel, onSave }) {
-  const [visualType, setVisualType] = useState(initial?.visualType || "emoji");
-  const [emoji, setEmoji] = useState(initial?.emoji || "");
-  const [photoUrl, setPhotoUrl] = useState(initial?.photoUrl || "");
-  const [audioUrl, setAudioUrl] = useState(initial?.audioUrl || "");
-  const [en, setEn] = useState(initial?.en || "");
-  const [note, setNote] = useState(initial?.note || "");
-  const [tab, setTab] = useState(Object.keys(EMOJI_BANK)[0]);
-  const normalizedPhotoUrl = normalizeImageUrl(photoUrl);
-  const normalizedAudioUrl = normalizeAudioUrl(audioUrl);
-
-  const canSave = en.trim() && ((visualType === "emoji" && emoji.trim()) || (visualType === "photo" && photoUrl.trim()));
-
-  const handleSave = () => {
-    onSave({
-      id: initial?.id || uid(),
-      en: en.trim(),
-      note: note.trim(),
-      visualType,
-      emoji: visualType === "emoji" ? emoji.trim() : "",
-      photoUrl: visualType === "photo" ? normalizedPhotoUrl : undefined,
-      audioUrl: normalizedAudioUrl || undefined,
-    });
-  };
-
-  return (
-    <div className="card-paper rounded-md p-4 border border-[#b7d6e6] slide-up">
-      <div className="flex gap-1.5 mb-3">
-        <button onClick={() => setVisualType("emoji")} className={`flex-1 text-sm px-3 py-2 rounded flex items-center justify-center gap-1.5 font-medium ${visualType === "emoji" ? "bg-[#1687a7] text-[#ffffff]" : "bg-white/50 text-[#42677a]"}`}>
-          <Smile size={15} /> 絵文字
-        </button>
-        <button onClick={() => setVisualType("photo")} className={`flex-1 text-sm px-3 py-2 rounded flex items-center justify-center gap-1.5 font-medium ${visualType === "photo" ? "bg-[#1687a7] text-[#ffffff]" : "bg-white/50 text-[#42677a]"}`}>
-          <LinkIcon size={15} /> 画像URL
-        </button>
-      </div>
-
-      {visualType === "emoji" ? (
-        <>
-          <div className="flex gap-3 mb-3">
-            <input value={emoji} onChange={(e) => setEmoji(e.target.value.slice(0, 4))} placeholder="🖼️" className="w-16 h-16 text-3xl text-center rounded border border-[#b7d6e6] bg-white/60" aria-label="絵（絵文字）" />
-            <EnNoteInputs en={en} setEn={setEn} note={note} setNote={setNote} />
-          </div>
-          <div className="mb-3">
-            <div className="flex flex-wrap gap-1 mb-2">
-              {Object.keys(EMOJI_BANK).map((k) => (
-                <button key={k} onClick={() => setTab(k)} className={`text-xs px-2 py-1 rounded font-mono ${tab === k ? "bg-[#1687a7] text-[#ffffff]" : "bg-white/50 text-[#42677a]"}`}>{k}</button>
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {EMOJI_BANK[tab].map((em) => (
-                <button key={em} onClick={() => setEmoji(em)} className="text-xl w-9 h-9 flex items-center justify-center rounded hover:bg-white/60 bg-white/30">{em}</button>
-              ))}
-            </div>
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="flex gap-3 mb-3">
-            <div className="w-16 h-16 rounded border border-[#b7d6e6] bg-white/60 flex items-center justify-center overflow-hidden shrink-0">
-              {normalizedPhotoUrl ? (
-                <img src={normalizedPhotoUrl} alt="" className="w-16 h-16 object-cover" onError={(e) => (e.currentTarget.style.display = "none")} />
-              ) : (
-                <ImageOff className="text-[#6b8794]" size={20} />
-              )}
-            </div>
-            <EnNoteInputs en={en} setEn={setEn} note={note} setNote={setNote} />
-          </div>
-          <input value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} placeholder="https://example.com/apple.jpg" className="w-full rounded border border-[#b7d6e6] bg-white/60 px-3 py-2 text-sm mb-1" />
-          <p className="text-[10px] text-[#6b8794] mb-2">画像はどこかにアップロード済みのものへのリンクを貼ってください。多くの場合はスプレッドシート連携でまとめて登録する方が簡単です。</p>
-        </>
-      )}
-
-      <div className="mb-2">
-        <input value={audioUrl} onChange={(e) => setAudioUrl(e.target.value)} placeholder="音声URL（任意）" className="w-full rounded border border-[#b7d6e6] bg-white/60 px-3 py-2 text-sm" />
-      </div>
-
-      <div className="flex gap-2 justify-end mt-2">
-        <button onClick={onCancel} className="px-3 py-1.5 text-sm text-[#42677a]">キャンセル</button>
-        <button disabled={!canSave} onClick={handleSave} className="px-4 py-1.5 text-sm rounded bg-[#1687a7] text-[#ffffff] disabled:opacity-40">{initial ? "更新" : "追加"}</button>
-      </div>
-    </div>
-  );
-}
-
-function EnNoteInputs({ en, setEn, note, setNote }) {
-  return (
-    <div className="flex-1 flex flex-col gap-2">
-      <input value={en} onChange={(e) => setEn(e.target.value)} placeholder="This is a book." className="rounded border border-[#b7d6e6] bg-white/60 px-3 py-2 font-display text-[#16475f]" autoFocus />
-      <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="メモ（任意・出題には使われません）" className="rounded border border-[#b7d6e6] bg-white/40 px-3 py-1.5 text-sm text-[#42677a]" />
     </div>
   );
 }
