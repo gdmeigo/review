@@ -226,11 +226,10 @@ function addLessonPoint(lessonBucket, item, point) {
   const text = (point || "").trim();
   if (!text) return;
   const sortValue = itemSortValue(item);
-  if (!lessonBucket.point || sortValue < lessonBucket.point.sortValue) {
-    lessonBucket.point = { sortValue, lines: [text] };
-  } else if (sortValue === lessonBucket.point.sortValue && !lessonBucket.point.lines.includes(text)) {
-    lessonBucket.point.lines.push(text);
-  }
+  const key = `${sortValue}:${text}`;
+  if (lessonBucket.pointKeys.has(key)) return;
+  lessonBucket.pointKeys.add(key);
+  lessonBucket.points.push({ sortValue, text });
 }
 function buildContentFromRows(rows, viewerId = "") {
   const order = [];
@@ -255,7 +254,7 @@ function buildContentFromRows(rows, viewerId = "") {
     const hint = getField(row, "hint");
     const point = getField(row, "point");
     if (!byTitle[title]) {
-      byTitle[title] = { title, lessonNo, emoji: emoji || "📇", cards: [], cardsByItem: {}, point: null };
+      byTitle[title] = { title, lessonNo, emoji: emoji || "📇", cards: [], cardsByItem: {}, points: [], pointKeys: new Set() };
       order.push(title);
     } else if (emoji && byTitle[title].emoji === "📇") {
       byTitle[title].emoji = emoji;
@@ -321,7 +320,11 @@ function buildContentFromRows(rows, viewerId = "") {
         emoji: c.image ? "" : c.emoji || "❓",
       };
     });
-    const point = l.point?.lines?.join("\n") || "";
+    const point = l.points
+      .slice()
+      .sort((a, b) => a.sortValue - b.sortValue)
+      .map((entry) => entry.text)
+      .join("\n");
     lessonsMap[lessonId] = { id: lessonId, title, lessonNo: l.lessonNo, emoji: l.emoji, cards, point };
     index.push({ id: lessonId, title, lessonNo: l.lessonNo, emoji: l.emoji, count: cards.length, point });
   });
