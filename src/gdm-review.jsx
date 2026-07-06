@@ -32,6 +32,7 @@ const DEFAULT_EXCEL_URL = "https://docs.google.com/spreadsheets/d/1NbV4QywhVxkT8
 const DEFAULT_SHEET_DOWNLOAD_URL = DEFAULT_EXCEL_URL;
 const CONTENT_IMPORTED_KEY = "content-imported";
 const CONTENT_VERSION = "2026-07-05-google-sheet-default";
+const USER_ID_KEY = "viewer-id";
 
 function getGoogleDriveFileId(url) {
   try {
@@ -184,9 +185,39 @@ function parseClozeSentence(value, answerValue) {
 function isAnswerCorrect(expected, actual) {
   return !expected || actual === expected;
 }
-function buildContentFromRows(rows) {
+function normalizeViewerId(value) {
+  return (value || "").trim().replace(/^id[:：]/i, "").toLowerCase();
+}
+function isEnabledCell(value) {
+  return String(value ?? "").trim() === "1";
+}
+function getIdFieldName(viewerId) {
+  return "id:" + normalizeViewerId(viewerId);
+}
+function normalizeIdColumnKey(key) {
+  return normKey(key).toLowerCase().replace(/^id：/, "id:");
+}
+function isIdColumn(key) {
+  return normalizeIdColumnKey(key).startsWith("id:");
+}
+function rowMatchesViewer(row, viewerId) {
+  const normalizedId = normalizeViewerId(viewerId);
+  if (normalizedId === "admin") return true;
+  if (!normalizedId) return false;
+  const target = getIdFieldName(normalizedId);
+  for (const key of Object.keys(row)) {
+    if (isIdColumn(key) && normalizeIdColumnKey(key) === target && isEnabledCell(row[key])) return true;
+  }
+  return false;
+}
+function contentKey(viewerId, key) {
+  return `content:${normalizeViewerId(viewerId) || "none"}:${key}`;
+}
+function buildContentFromRows(rows, viewerId = "") {
   const order = [];
   const byTitle = {};
+  const visibleTitles = new Set();
+  const normalizedViewerId = normalizeViewerId(viewerId);
   rows.forEach((row) => {
     const sentence = getField(row, "sentence");
     const en = sentence || getField(row, "en");
@@ -196,6 +227,7 @@ function buildContentFromRows(rows) {
     const audioUrl = normalizeAudioUrl(getField(row, "audio"));
     if (!en && choices.length === 0 && !answer) return;
     const title = getField(row, "lesson") || "未分類";
+    if (rowMatchesViewer(row, normalizedViewerId)) visibleTitles.add(title);
     const lessonNo = getField(row, "lessonNo");
     const item = getField(row, "item");
     const emoji = getField(row, "emoji");
@@ -240,6 +272,7 @@ function buildContentFromRows(rows) {
   const lessonsMap = {};
   const index = [];
   order.forEach((title) => {
+    if (normalizedViewerId !== "admin" && !visibleTitles.has(title)) return;
     const l = byTitle[title];
     let lessonId = "l-" + slugify(title);
     let n = 2;
@@ -304,6 +337,7 @@ export default function App() {
   const [stats, setStats] = useState({ xp: 0, reviewDates: [] });
   const [progressByLesson, setProgressByLesson] = useState({});
   const [screen, setScreen] = useState({ name: "home" });
+  const [viewerId, setViewerId] = useState("");
 
   const safeGet = async (key, shared) => {
     try {
@@ -327,49 +361,54 @@ export default function App() {
     } catch {}
   };
 
+  const loadContentForViewer = async (activeViewerId) => {
+    const normalizedId = normalizeViewerId(activeViewerId);
+    const idxRaw = await safeGet(contentKey(normalizedId, "lesson-index"), false);
+    let idx = idxRaw ? JSON.parse(idxRaw) : [];
+
+    let loaded = {};
+    for (const meta of idx) {
+      const raw = await safeGet(contentKey(normalizedId, "lesson:" + meta.id), false);
+      if (raw) loaded[meta.id] = JSON.parse(raw);
+    }
+
+    try {
+      const response = await fetch(DEFAULT_EXCEL_URL, { cache: "no-cache" });
+      if (!response.ok) throw new Error("Default Excel not found");
+      const rows = parseSheetBuffer(
+        await response.arrayBuffer(),
+        "review.xlsx",
+        response.headers.get("content-type") || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      );
+      const { index: defaultIndex, lessonsMap } = buildContentFromRows(rows, normalizedId);
+      for (const oldMeta of idx) {
+        if (!lessonsMap[oldMeta.id]) await safeDelete(contentKey(normalizedId, "lesson:" + oldMeta.id), false);
+      }
+      for (const l of Object.values(lessonsMap)) {
+        await safeSet(contentKey(normalizedId, "lesson:" + l.id), JSON.stringify(l), false);
+      }
+      await safeSet(contentKey(normalizedId, "lesson-index"), JSON.stringify(defaultIndex), false);
+      await safeSet(contentKey(normalizedId, CONTENT_IMPORTED_KEY), CONTENT_VERSION, false);
+      idx = defaultIndex;
+      loaded = lessonsMap;
+    } catch {
+      // Keep the app usable with the last successful fetch.
+    }
+
+    setIndex(idx);
+    setLessons(loaded);
+    setProgressByLesson({});
+    return idx;
+  };
+
   useEffect(() => {
     (async () => {
-      const idxRaw = await safeGet("lesson-index", true);
-      let idx = idxRaw ? JSON.parse(idxRaw) : [];
       const statsRaw = await safeGet("stats", false);
       const st = statsRaw ? JSON.parse(statsRaw) : { xp: 0, reviewDates: [] };
-      const importedRaw = await safeGet(CONTENT_IMPORTED_KEY, true);
-
-      let loaded = {};
-      for (const meta of idx) {
-        const raw = await safeGet("lesson:" + meta.id, true);
-        if (raw) loaded[meta.id] = JSON.parse(raw);
-      }
-
-      if (idx.length === 0 || importedRaw !== CONTENT_VERSION) {
-        try {
-          const response = await fetch(DEFAULT_EXCEL_URL, { cache: "no-cache" });
-          if (!response.ok) throw new Error("Default Excel not found");
-          const rows = parseSheetBuffer(
-            await response.arrayBuffer(),
-            "review.xlsx",
-            response.headers.get("content-type") || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          );
-          const { index: defaultIndex, lessonsMap } = buildContentFromRows(rows);
-          if (defaultIndex.length > 0) {
-            for (const l of Object.values(lessonsMap)) {
-              await safeSet("lesson:" + l.id, JSON.stringify(l), true);
-            }
-            await safeSet("lesson-index", JSON.stringify(defaultIndex), true);
-            await safeSet(CONTENT_IMPORTED_KEY, CONTENT_VERSION, true);
-            idx = defaultIndex;
-            loaded = lessonsMap;
-          }
-        } catch {
-          // Keep the app usable; settings still allows manual import.
-        }
-      } else if (idx.length > 0 && !importedRaw) {
-        await safeSet(CONTENT_IMPORTED_KEY, CONTENT_VERSION, true);
-      }
-
-      setIndex(idx);
-      setLessons(loaded);
+      const storedViewerId = normalizeViewerId(await safeGet(USER_ID_KEY, false));
+      setViewerId(storedViewerId);
       setStats(st);
+      if (storedViewerId) await loadContentForViewer(storedViewerId);
       setReady(true);
     })();
   }, []);
@@ -397,21 +436,31 @@ export default function App() {
 
   // ---- spreadsheet sync ----
   const importRows = async (rows) => {
-    const { index: newIndex, lessonsMap: newLessons } = buildContentFromRows(rows);
-    if (newIndex.length === 0) {
-      throw new Error("CSVに english 列のカードが見つかりませんでした");
-    }
+    const activeViewerId = normalizeViewerId(viewerId);
+    if (!activeViewerId) throw new Error("IDを入力してください");
+    const { index: newIndex, lessonsMap: newLessons } = buildContentFromRows(rows, activeViewerId);
     for (const oldMeta of index) {
-      if (!newLessons[oldMeta.id]) await safeDelete("lesson:" + oldMeta.id, true);
+      if (!newLessons[oldMeta.id]) await safeDelete(contentKey(activeViewerId, "lesson:" + oldMeta.id), false);
     }
     for (const l of Object.values(newLessons)) {
-      await safeSet("lesson:" + l.id, JSON.stringify(l), true);
+      await safeSet(contentKey(activeViewerId, "lesson:" + l.id), JSON.stringify(l), false);
     }
-    await safeSet("lesson-index", JSON.stringify(newIndex), true);
-    await safeSet(CONTENT_IMPORTED_KEY, CONTENT_VERSION, true);
+    await safeSet(contentKey(activeViewerId, "lesson-index"), JSON.stringify(newIndex), false);
+    await safeSet(contentKey(activeViewerId, CONTENT_IMPORTED_KEY), CONTENT_VERSION, false);
     setIndex(newIndex);
     setLessons(newLessons);
     return newIndex;
+  };
+
+  const saveViewerId = async (rawId) => {
+    const normalizedId = normalizeViewerId(rawId);
+    if (!normalizedId) return;
+    await safeSet(USER_ID_KEY, normalizedId, false);
+    setViewerId(normalizedId);
+    setScreen({ name: "home" });
+    setReady(false);
+    await loadContentForViewer(normalizedId);
+    setReady(true);
   };
 
   const allCardsFlat = useMemo(
@@ -463,6 +512,8 @@ export default function App() {
         <div className="cabinet-bg min-h-screen flex items-center justify-center">
           <Loader2 className="animate-spin text-[#73bfd7]" size={32} />
         </div>
+      ) : !viewerId ? (
+        <IdGate onSubmit={saveViewerId} />
       ) : (
         <div className="cabinet-bg min-h-screen">
           <TopBar screen={screen} setScreen={setScreen} xp={stats.xp} streak={streak} />
@@ -475,7 +526,7 @@ export default function App() {
               />
             )}
             {screen.name === "settings" && (
-              <SettingsScreen onImportRows={importRows} />
+              <SettingsScreen viewerId={viewerId} onChangeViewerId={saveViewerId} onImportRows={importRows} />
             )}
             {screen.name === "lesson" && lessons[screen.id] && (
               <LessonDetail
@@ -543,6 +594,36 @@ function TopBar({ screen, setScreen, xp, streak }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function IdGate({ onSubmit }) {
+  const [value, setValue] = useState("");
+  return (
+    <div className="cabinet-bg min-h-screen flex items-center justify-center px-4">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit(value);
+        }}
+        className="card-paper w-full max-w-sm rounded-md border border-[#b7d6e6] p-5 shadow-md"
+      >
+        <div className="mb-4">
+          <div className="font-display text-xl font-bold text-[#16475f]">ID</div>
+        </div>
+        <input
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          autoFocus
+          autoCapitalize="none"
+          autoCorrect="off"
+          className="mb-3 w-full rounded border border-[#b7d6e6] bg-white px-3 py-2 text-[#16475f] outline-none focus:border-[#1687a7]"
+        />
+        <button type="submit" className="w-full rounded bg-[#1687a7] px-3 py-2 font-bold text-white hover:brightness-110">
+          はじめる
+        </button>
+      </form>
     </div>
   );
 }
@@ -633,11 +714,39 @@ function PerfectBadges({ count }) {
   );
 }
 
-function SettingsScreen({ onImportRows }) {
+function SettingsScreen({ viewerId, onChangeViewerId, onImportRows }) {
   return (
     <div className="pt-6">
+      <ViewerIdPanel viewerId={viewerId} onChangeViewerId={onChangeViewerId} />
       <SheetSyncPanel onImportRows={onImportRows} />
     </div>
+  );
+}
+
+function ViewerIdPanel({ viewerId, onChangeViewerId }) {
+  const [value, setValue] = useState(viewerId || "");
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        onChangeViewerId(value);
+      }}
+      className="card-paper rounded-md border border-[#b7d6e6] p-4"
+    >
+      <div className="mb-2 font-display font-bold text-[#16475f]">ID</div>
+      <div className="flex gap-2">
+        <input
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          autoCapitalize="none"
+          autoCorrect="off"
+          className="min-w-0 flex-1 rounded border border-[#b7d6e6] bg-white px-3 py-2 text-sm text-[#16475f] outline-none focus:border-[#1687a7]"
+        />
+        <button type="submit" className="shrink-0 rounded bg-[#1687a7] px-3 py-2 text-sm font-bold text-white hover:brightness-110">
+          変更
+        </button>
+      </div>
+    </form>
   );
 }
 
