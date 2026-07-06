@@ -1072,22 +1072,6 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
                 </span>
               ))}
             </div>
-            {line.hint && (
-              <div className="mt-2 text-left">
-                <button
-                  type="button"
-                  onClick={() => setVisibleHints((prev) => ({ ...prev, [lineIndex]: !prev[lineIndex] }))}
-                  className="rounded border border-[#73bfd7] bg-white px-2 py-1 text-xs font-bold text-[#166078] hover:bg-[#e8f7fb]"
-                >
-                  ヒント
-                </button>
-                {visibleHints[lineIndex] && (
-                  <div className="mt-2 rounded border border-[#b7d6e6] bg-white/80 p-2 text-xs leading-5 text-[#42677a]">
-                    {line.hint}
-                  </div>
-                )}
-              </div>
-            )}
             <div className="mt-2 flex flex-wrap gap-2">
               {(shuffledChoicesByLine[lineIndex] || []).map((choice) => (
                 <button
@@ -1117,6 +1101,22 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
                 </button>
               )}
             </div>
+            {line.hint && (
+              <div className="mt-2 text-left">
+                <button
+                  type="button"
+                  onClick={() => setVisibleHints((prev) => ({ ...prev, [lineIndex]: !prev[lineIndex] }))}
+                  className="rounded border border-[#73bfd7] bg-white px-2 py-1 text-xs font-bold text-[#166078] hover:bg-[#e8f7fb]"
+                >
+                  ヒント
+                </button>
+                {visibleHints[lineIndex] && (
+                  <div className="mt-2 rounded border border-[#b7d6e6] bg-white/80 p-2 text-xs leading-5 text-[#42677a]">
+                    {line.hint}
+                  </div>
+                )}
+              </div>
+            )}
             {line.audioUrl && <div className="mt-2"><AudioButton src={line.audioUrl} /></div>}
           </div>
         ))}
@@ -1276,44 +1276,46 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
         ) : (
           <div className="font-display text-2xl font-bold text-[#16475f] py-4 border-b-2 border-[#b7d6e6] inline-block px-4">{q.card.en}</div>
         )}
-        {q.type !== "worksheet" && q.card.hint && (
-          <div className="mt-4">
-            <button
-              type="button"
-              onClick={() => setShowHint((value) => !value)}
-              className="rounded border border-[#73bfd7] bg-white px-3 py-1.5 text-xs font-bold text-[#166078] hover:bg-[#e8f7fb]"
-            >
-              ヒント
-            </button>
-            {showHint && (
-              <div className="mx-auto mt-3 max-w-sm rounded border border-[#b7d6e6] bg-white/80 p-3 text-left text-xs leading-5 text-[#42677a]">
-                {q.card.hint}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {q.type !== "worksheet" && (
-        <div className={`grid gap-3 ${q.choices.length > 2 ? "grid-cols-2" : "grid-cols-1"}`}>
-          {q.choices.map((choice) => {
-            const isThisSelected = selected?.choiceId === choice.id;
-            const isAnswer = choice.id === q.card.id;
-            let cls = "bg-white/70 border-[#b7d6e6] text-[#16475f] hover:bg-white";
-            if (selected) {
-              if (isAnswer) cls = "bg-[#dcefe2] border-[#16805d] text-[#1e4632]";
-              else if (isThisSelected) cls = "bg-[#fff1f3] border-[#b42335] text-[#b42335]";
-              else cls = "bg-white/30 border-[#b7d6e6] text-[#6b8794] opacity-60";
-            }
-            return (
-              <button key={choice.id} onClick={() => handleChoice(choice)} disabled={!!selected} className={`rounded-md border-2 p-4 flex items-center justify-center gap-2 font-display font-semibold text-lg transition min-h-[64px] ${cls}`}>
-                {selected && isAnswer && <Check size={18} className="stamp shrink-0" />}
-                {selected && isThisSelected && !isAnswer && <X size={18} className="stamp shrink-0" />}
-                {q.type === "pic2en" ? cardLabel(choice) : <CardVisual card={choice} className="max-h-14 max-w-[90px] object-contain text-3xl" iconSize={28} />}
+        <>
+          <div className={`grid gap-3 ${q.choices.length > 2 ? "grid-cols-2" : "grid-cols-1"}`}>
+            {q.choices.map((choice) => {
+              const isThisSelected = selected?.choiceId === choice.id;
+              const isAnswer = choice.id === q.card.id;
+              let cls = "bg-white/70 border-[#b7d6e6] text-[#16475f] hover:bg-white";
+              if (selected) {
+                if (isAnswer) cls = "bg-[#dcefe2] border-[#16805d] text-[#1e4632]";
+                else if (isThisSelected) cls = "bg-[#fff1f3] border-[#b42335] text-[#b42335]";
+                else cls = "bg-white/30 border-[#b7d6e6] text-[#6b8794] opacity-60";
+              }
+              return (
+                <button key={choice.id} onClick={() => handleChoice(choice)} disabled={!!selected} className={`rounded-md border-2 p-4 flex items-center justify-center gap-2 font-display font-semibold text-lg transition min-h-[64px] ${cls}`}>
+                  {selected && isAnswer && <Check size={18} className="stamp shrink-0" />}
+                  {selected && isThisSelected && !isAnswer && <X size={18} className="stamp shrink-0" />}
+                  {q.type === "pic2en" ? cardLabel(choice) : <CardVisual card={choice} className="max-h-14 max-w-[90px] object-contain text-3xl" iconSize={28} />}
+                </button>
+              );
+            })}
+          </div>
+          {q.card.hint && (
+            <div className="mt-3 text-center">
+              <button
+                type="button"
+                onClick={() => setShowHint((value) => !value)}
+                className="rounded border border-[#73bfd7] bg-white px-3 py-1.5 text-xs font-bold text-[#166078] hover:bg-[#e8f7fb]"
+              >
+                ヒント
               </button>
-            );
-          })}
-        </div>
+              {showHint && (
+                <div className="mx-auto mt-3 max-w-sm rounded border border-[#b7d6e6] bg-white/80 p-3 text-left text-xs leading-5 text-[#42677a]">
+                  {q.card.hint}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       {selected && (
