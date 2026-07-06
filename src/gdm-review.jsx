@@ -730,8 +730,7 @@ function Home({ index, perfectByLesson, onOpen }) {
                 <button
                   type="button"
                   onClick={() => setPointLesson(meta)}
-                  disabled={!perfectByLesson[meta.id]}
-                  className="shrink-0 rounded border border-[#73bfd7] bg-white px-3 py-2 text-xs font-bold text-[#166078] hover:bg-[#e8f7fb] disabled:cursor-not-allowed disabled:opacity-40"
+                  className="shrink-0 rounded border border-[#73bfd7] bg-white px-3 py-2 text-xs font-bold text-[#166078] hover:bg-[#e8f7fb]"
                 >
                   ポイント
                 </button>
