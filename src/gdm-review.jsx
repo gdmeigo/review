@@ -658,6 +658,13 @@ function IdGate({ onSubmit }) {
 function Home({ index, perfectByLesson, onOpen }) {
   const [jumpNo, setJumpNo] = useState("");
   const [pointLesson, setPointLesson] = useState(null);
+  const displayIndex = useMemo(
+    () =>
+      index
+        .map((meta, originalIndex) => ({ ...meta, displayNo: meta.lessonNo || originalIndex + 1 }))
+        .sort((a, b) => Number(b.displayNo) - Number(a.displayNo)),
+    [index]
+  );
   const openByNumber = () => {
     const normalized = jumpNo.trim();
     if (!normalized) return;
@@ -701,12 +708,12 @@ function Home({ index, perfectByLesson, onOpen }) {
       )}
 
       <div className="space-y-3">
-        {index.map((meta, indexPosition) => (
+        {displayIndex.map((meta) => (
           <div key={meta.id} className="drawer-front w-full rounded-md p-4 shadow-md">
             <div className="flex items-center gap-4">
               <button onClick={() => onOpen(meta.id)} disabled={(meta.count || 0) < 1} className="flex min-w-0 flex-1 items-center gap-4 text-left hover:brightness-110 transition disabled:opacity-50 disabled:cursor-not-allowed">
                 <div className="brass rounded w-12 h-12 flex flex-col items-center justify-center shrink-0">
-                  <span className="font-mono text-[11px] font-bold leading-none text-[#16475f]">{meta.lessonNo || indexPosition + 1}</span>
+                  <span className="font-mono text-[11px] font-bold leading-none text-[#16475f]">{meta.displayNo}</span>
                   <span className="text-lg leading-none">{meta.emoji || "📇"}</span>
                 </div>
                 <div className="flex-1 min-w-0">
