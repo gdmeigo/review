@@ -191,7 +191,12 @@ function normalizeViewerId(value) {
   return (value || "").trim().replace(/^id[:：]/i, "").toLowerCase();
 }
 function isEnabledCell(value) {
-  return String(value ?? "").trim() === "1";
+  return getEnabledNumber(value) > 0;
+}
+function getEnabledNumber(value) {
+  const raw = String(value ?? "").trim();
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
 }
 function getIdFieldName(viewerId) {
   return "id:" + normalizeViewerId(viewerId);
@@ -202,15 +207,36 @@ function normalizeIdColumnKey(key) {
 function isIdColumn(key) {
   return normalizeIdColumnKey(key).startsWith("id:");
 }
+function getViewerIdCellValue(row, viewerId) {
+  const normalizedId = normalizeViewerId(viewerId);
+  if (!normalizedId || normalizedId === "admin") return "";
+  const target = getIdFieldName(normalizedId);
+  for (const key of Object.keys(row)) {
+    if (isIdColumn(key) && normalizeIdColumnKey(key) === target) return row[key];
+  }
+  return "";
+}
 function rowMatchesViewer(row, viewerId) {
   const normalizedId = normalizeViewerId(viewerId);
   if (normalizedId === "admin") return true;
   if (!normalizedId) return false;
-  const target = getIdFieldName(normalizedId);
-  for (const key of Object.keys(row)) {
-    if (isIdColumn(key) && normalizeIdColumnKey(key) === target && isEnabledCell(row[key])) return true;
+  return isEnabledCell(getViewerIdCellValue(row, normalizedId));
+}
+function resolveLessonDisplayOrders(lessonOrderValues, order) {
+  const visibleTitles = order.filter((title) => lessonOrderValues[title]?.length);
+  const allOne = visibleTitles.length > 0 && visibleTitles.every((title) => lessonOrderValues[title].every((value) => value === 1));
+  if (allOne) {
+    const resolved = {};
+    visibleTitles.forEach((title, index) => {
+      resolved[title] = index + 1;
+    });
+    return resolved;
   }
-  return false;
+  const resolved = {};
+  for (const title of visibleTitles) {
+    resolved[title] = Math.max(...lessonOrderValues[title]);
+  }
+  return resolved;
 }
 function contentKey(viewerId, key) {
   return `content:${normalizeViewerId(viewerId) || "none"}:${key}`;
@@ -235,6 +261,7 @@ function buildContentFromRows(rows, viewerId = "") {
   const order = [];
   const byTitle = {};
   const visibleTitles = new Set();
+  const lessonOrderValues = {};
   const normalizedViewerId = normalizeViewerId(viewerId);
   rows.forEach((row) => {
     const sentence = getField(row, "sentence");
@@ -245,7 +272,16 @@ function buildContentFromRows(rows, viewerId = "") {
     const audioUrl = normalizeAudioUrl(getField(row, "audio"));
     if (!en && choices.length === 0 && !answer) return;
     const title = getField(row, "lesson") || "未分類";
-    if (rowMatchesViewer(row, normalizedViewerId)) visibleTitles.add(title);
+    if (rowMatchesViewer(row, normalizedViewerId)) {
+      visibleTitles.add(title);
+      if (normalizedViewerId !== "admin") {
+        const orderValue = getEnabledNumber(getViewerIdCellValue(row, normalizedViewerId));
+        if (orderValue > 0) {
+          if (!lessonOrderValues[title]) lessonOrderValues[title] = [];
+          lessonOrderValues[title].push(orderValue);
+        }
+      }
+    }
     const lessonNo = getField(row, "lessonNo");
     const item = getField(row, "item");
     const emoji = getField(row, "emoji");
@@ -294,6 +330,7 @@ function buildContentFromRows(rows, viewerId = "") {
   const usedLessonIds = new Set();
   const lessonsMap = {};
   const index = [];
+  const resolvedDisplayOrders = normalizedViewerId === "admin" ? {} : resolveLessonDisplayOrders(lessonOrderValues, order);
   order.forEach((title) => {
     if (normalizedViewerId !== "admin" && !visibleTitles.has(title)) return;
     const l = byTitle[title];
@@ -325,8 +362,9 @@ function buildContentFromRows(rows, viewerId = "") {
       .sort((a, b) => a.sortValue - b.sortValue)
       .map((entry) => entry.text)
       .join("\n");
-    lessonsMap[lessonId] = { id: lessonId, title, lessonNo: l.lessonNo, emoji: l.emoji, cards, point };
-    index.push({ id: lessonId, title, lessonNo: l.lessonNo, emoji: l.emoji, count: cards.length, point });
+    const displayOrder = resolvedDisplayOrders[title] || "";
+    lessonsMap[lessonId] = { id: lessonId, title, lessonNo: l.lessonNo, displayOrder, emoji: l.emoji, cards, point };
+    index.push({ id: lessonId, title, lessonNo: l.lessonNo, displayOrder, emoji: l.emoji, count: cards.length, point });
   });
   return { index, lessonsMap };
 }
@@ -664,7 +702,10 @@ function Home({ index, perfectByLesson, onOpen }) {
   const displayIndex = useMemo(
     () =>
       index
-        .map((meta, originalIndex) => ({ ...meta, displayNo: meta.lessonNo || originalIndex + 1 }))
+        .map((meta, originalIndex) => ({
+          ...meta,
+          displayNo: meta.displayOrder || meta.lessonNo || originalIndex + 1,
+        }))
         .sort((a, b) => Number(b.displayNo) - Number(a.displayNo)),
     [index]
   );
@@ -824,10 +865,10 @@ function ViewerIdPanel({ viewerId, onChangeViewerId }) {
 function SheetSyncPanel({ onImportRows }) {
   const [status, setStatus] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
-  const csvExample = `lesson_no,lesson,item,image,sentence,choices,answer,audio,note,hint,point
-1,WorkP22,1,https://example.com/picture1.png,This is a {{man}}.,man|woman,,https://example.com/audio1.mp3,{{ }} の中が空欄になります,人物を表す語を選びます,be動詞の後ろは名詞を置けます
-1,WorkP22,1,https://example.com/picture1.png,Her {{book}} is on the {{table}}.,book|bag|table|desk,,,,,
-1,WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,____ を使う場合は answer に正解を書きます,,`;
+  const csvExample = `lesson_no,lesson,item,image,sentence,choices,answer,audio,note,hint,point,ID:sample
+1,WorkP22,1,https://example.com/picture1.png,This is a {{man}}.,man|woman,,https://example.com/audio1.mp3,{{ }} の中が空欄になります,人物を表す語を選びます,be動詞の後ろは名詞を置けます,1
+1,WorkP22,1,https://example.com/picture1.png,Her {{book}} is on the {{table}}.,book|bag|table|desk,,,,,,1
+1,WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,____ を使う場合は answer に正解を書きます,,,1`;
 
   const doFileImport = async (file) => {
     if (!file) return;
@@ -850,8 +891,12 @@ function SheetSyncPanel({ onImportRows }) {
       </div>
       <p className="text-xs text-[#42677a] mb-3">
         CSVまたはExcelファイルからワークシートを読み込めます。列は
-        <span className="font-mono"> lesson_no / lesson / item / image / sentence / choices / answer / audio / note / hint / point </span>
+        <span className="font-mono"> lesson_no / lesson / item / image / sentence / choices / answer / audio / note / hint / point / ID:任意のID </span>
         を使えます。image、audioにはGoogle Driveに配置した画像と音声をURLで指定してください。Google Driveの上位フォルダ設定はリンクを知っている人が閲覧できる設定にしてください。
+      </p>
+      <p className="text-xs text-[#42677a] mb-3">
+        ID列は <span className="font-mono">ID:sample</span> のように作ります。入力IDと同じ列に数値があるレッスンだけ表示します。
+        その数値が1,2,3...なら数値の降順で並びます。すべて1の場合は、シートの上から1,2,3...として扱い、降順に表示します。
       </p>
       <button onClick={() => setShowHelp((s) => !s)} className="text-xs text-[#1687a7] underline mb-3">
         {showHelp ? "手順を隠す" : "読み込み手順を見る"}
