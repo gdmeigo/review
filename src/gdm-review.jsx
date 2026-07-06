@@ -99,6 +99,8 @@ const FIELD_ALIASES = {
   image: ["image", "imageurl", "image_url", "画像", "画像url", "picture", "photo"],
   audio: ["audio", "audiourl", "audio_url", "sound", "音声", "音声url"],
   note: ["note", "メモ", "memo"],
+  hint: ["hint", "ヒント"],
+  point: ["point", "ポイント"],
 };
 const normKey = (k) => (k || "").toString().trim().toLowerCase().replace(/\s+/g, "");
 function getField(rowObj, field) {
@@ -213,6 +215,23 @@ function rowMatchesViewer(row, viewerId) {
 function contentKey(viewerId, key) {
   return `content:${normalizeViewerId(viewerId) || "none"}:${key}`;
 }
+function itemSortValue(item) {
+  const raw = (item || "").toString().trim();
+  const numeric = Number(raw.match(/\d+(?:\.\d+)?/)?.[0]);
+  if (Number.isFinite(numeric)) return numeric;
+  const letter = raw.match(/[A-Za-z]/)?.[0]?.toUpperCase();
+  return letter ? 100000 + letter.charCodeAt(0) : Number.MAX_SAFE_INTEGER;
+}
+function addLessonPoint(lessonBucket, item, point) {
+  const text = (point || "").trim();
+  if (!text) return;
+  const sortValue = itemSortValue(item);
+  if (!lessonBucket.point || sortValue < lessonBucket.point.sortValue) {
+    lessonBucket.point = { sortValue, lines: [text] };
+  } else if (sortValue === lessonBucket.point.sortValue && !lessonBucket.point.lines.includes(text)) {
+    lessonBucket.point.lines.push(text);
+  }
+}
 function buildContentFromRows(rows, viewerId = "") {
   const order = [];
   const byTitle = {};
@@ -233,14 +252,17 @@ function buildContentFromRows(rows, viewerId = "") {
     const emoji = getField(row, "emoji");
     const image = normalizeImageUrl(getField(row, "image"));
     const note = getField(row, "note");
+    const hint = getField(row, "hint");
+    const point = getField(row, "point");
     if (!byTitle[title]) {
-      byTitle[title] = { title, lessonNo, emoji: emoji || "📇", cards: [], cardsByItem: {} };
+      byTitle[title] = { title, lessonNo, emoji: emoji || "📇", cards: [], cardsByItem: {}, point: null };
       order.push(title);
     } else if (emoji && byTitle[title].emoji === "📇") {
       byTitle[title].emoji = emoji;
     } else if (lessonNo && !byTitle[title].lessonNo) {
       byTitle[title].lessonNo = lessonNo;
     }
+    addLessonPoint(byTitle[title], item, point);
     const isWorksheetRow = !!(sentence || choices.length > 0 || answer || audioUrl || item);
     if (isWorksheetRow) {
       const itemKey = item || image || en || `row-${byTitle[title].cards.length + 1}`;
@@ -253,6 +275,7 @@ function buildContentFromRows(rows, viewerId = "") {
       if (image && !card.image) card.image = image;
       if (emoji && !card.emoji) card.emoji = emoji;
       if (note && !card.note) card.note = note;
+      if (hint && !card.hint) card.hint = hint;
       if (audioUrl && !card.audioUrl) card.audioUrl = audioUrl;
       card.worksheetLines.push({
         sentence: cloze.sentence,
@@ -262,9 +285,10 @@ function buildContentFromRows(rows, viewerId = "") {
         blankCount: cloze.blankCount,
         audioUrl,
         note,
+        hint,
       });
     } else {
-      byTitle[title].cards.push({ en, image, emoji, note, audioUrl });
+      byTitle[title].cards.push({ en, image, emoji, note, hint, audioUrl });
     }
   });
 
@@ -289,6 +313,7 @@ function buildContentFromRows(rows, viewerId = "") {
         id: cardId,
         en: c.en,
         note: c.note,
+        hint: c.hint,
         visualType: c.image ? "photo" : "emoji",
         photoUrl: c.image || undefined,
         audioUrl: c.audioUrl || undefined,
@@ -296,8 +321,9 @@ function buildContentFromRows(rows, viewerId = "") {
         emoji: c.image ? "" : c.emoji || "❓",
       };
     });
-    lessonsMap[lessonId] = { id: lessonId, title, lessonNo: l.lessonNo, emoji: l.emoji, cards };
-    index.push({ id: lessonId, title, lessonNo: l.lessonNo, emoji: l.emoji, count: cards.length });
+    const point = l.point?.lines?.join("\n") || "";
+    lessonsMap[lessonId] = { id: lessonId, title, lessonNo: l.lessonNo, emoji: l.emoji, cards, point };
+    index.push({ id: lessonId, title, lessonNo: l.lessonNo, emoji: l.emoji, count: cards.length, point });
   });
   return { index, lessonsMap };
 }
@@ -631,6 +657,7 @@ function IdGate({ onSubmit }) {
 /* ---------------- Home ---------------- */
 function Home({ index, perfectByLesson, onOpen }) {
   const [jumpNo, setJumpNo] = useState("");
+  const [pointLesson, setPointLesson] = useState(null);
   const openByNumber = () => {
     const normalized = jumpNo.trim();
     if (!normalized) return;
@@ -675,19 +702,53 @@ function Home({ index, perfectByLesson, onOpen }) {
 
       <div className="space-y-3">
         {index.map((meta, indexPosition) => (
-          <button key={meta.id} onClick={() => onOpen(meta.id)} disabled={(meta.count || 0) < 1} className="drawer-front w-full rounded-md p-4 flex items-center gap-4 text-left shadow-md hover:brightness-110 transition disabled:opacity-50 disabled:cursor-not-allowed">
-            <div className="brass rounded w-12 h-12 flex flex-col items-center justify-center shrink-0">
-              <span className="font-mono text-[11px] font-bold leading-none text-[#16475f]">{meta.lessonNo || indexPosition + 1}</span>
-              <span className="text-lg leading-none">{meta.emoji || "📇"}</span>
+          <div key={meta.id} className="drawer-front w-full rounded-md p-4 shadow-md">
+            <div className="flex items-center gap-4">
+              <button onClick={() => onOpen(meta.id)} disabled={(meta.count || 0) < 1} className="flex min-w-0 flex-1 items-center gap-4 text-left hover:brightness-110 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                <div className="brass rounded w-12 h-12 flex flex-col items-center justify-center shrink-0">
+                  <span className="font-mono text-[11px] font-bold leading-none text-[#16475f]">{meta.lessonNo || indexPosition + 1}</span>
+                  <span className="text-lg leading-none">{meta.emoji || "📇"}</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-display text-[#16475f] text-lg font-semibold truncate">{meta.title}</div>
+                  <div className="font-mono text-xs text-[#42677a]">{meta.count || 0} 枚のカード</div>
+                  <PerfectBadges count={perfectByLesson[meta.id] || 0} />
+                </div>
+                <ChevronRight className="text-[#1687a7]" size={20} />
+              </button>
+              {meta.point && (
+                <button
+                  type="button"
+                  onClick={() => setPointLesson(meta)}
+                  disabled={!perfectByLesson[meta.id]}
+                  className="shrink-0 rounded border border-[#73bfd7] bg-white px-3 py-2 text-xs font-bold text-[#166078] hover:bg-[#e8f7fb] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  ポイント
+                </button>
+              )}
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="font-display text-[#16475f] text-lg font-semibold truncate">{meta.title}</div>
-              <div className="font-mono text-xs text-[#42677a]">{meta.count || 0} 枚のカード</div>
-              <PerfectBadges count={perfectByLesson[meta.id] || 0} />
-            </div>
-            <ChevronRight className="text-[#1687a7]" size={20} />
-          </button>
+          </div>
         ))}
+      </div>
+      {pointLesson && <PointModal lesson={pointLesson} onClose={() => setPointLesson(null)} />}
+    </div>
+  );
+}
+
+function PointModal({ lesson, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#16475f]/30 px-4">
+      <div className="card-paper w-full max-w-md rounded-md border border-[#b7d6e6] p-5 shadow-xl">
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <div className="font-display text-lg font-bold text-[#16475f]">{lesson.title}</div>
+            <div className="font-mono text-xs text-[#42677a]">ポイント</div>
+          </div>
+          <button type="button" onClick={onClose} className="rounded px-2 py-1 text-[#42677a] hover:bg-[#e8f7fb]">
+            閉じる
+          </button>
+        </div>
+        <div className="whitespace-pre-line text-sm leading-7 text-[#16475f]">{lesson.point}</div>
       </div>
     </div>
   );
@@ -754,10 +815,10 @@ function ViewerIdPanel({ viewerId, onChangeViewerId }) {
 function SheetSyncPanel({ onImportRows }) {
   const [status, setStatus] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
-  const csvExample = `lesson_no,lesson,item,image,sentence,choices,answer,audio,note
-1,WorkP22,1,https://example.com/picture1.png,This is a {{man}}.,man|woman,,https://example.com/audio1.mp3,{{ }} の中が空欄になります
-1,WorkP22,1,https://example.com/picture1.png,Her {{book}} is on the {{table}}.,book|bag|table|desk,,,
-1,WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,____ を使う場合は answer に正解を書きます`;
+  const csvExample = `lesson_no,lesson,item,image,sentence,choices,answer,audio,note,hint,point
+1,WorkP22,1,https://example.com/picture1.png,This is a {{man}}.,man|woman,,https://example.com/audio1.mp3,{{ }} の中が空欄になります,人物を表す語を選びます,be動詞の後ろは名詞を置けます
+1,WorkP22,1,https://example.com/picture1.png,Her {{book}} is on the {{table}}.,book|bag|table|desk,,,,,
+1,WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,____ を使う場合は answer に正解を書きます,,`;
 
   const doFileImport = async (file) => {
     if (!file) return;
@@ -780,7 +841,7 @@ function SheetSyncPanel({ onImportRows }) {
       </div>
       <p className="text-xs text-[#42677a] mb-3">
         CSVまたはExcelファイルからワークシートを読み込めます。列は
-        <span className="font-mono"> lesson_no / lesson / item / image / sentence / choices / answer / audio / note </span>
+        <span className="font-mono"> lesson_no / lesson / item / image / sentence / choices / answer / audio / note / hint / point </span>
         を使えます。image、audioにはGoogle Driveに配置した画像と音声をURLで指定してください。Google Driveの上位フォルダ設定はリンクを知っている人が閲覧できる設定にしてください。
       </p>
       <button onClick={() => setShowHelp((s) => !s)} className="text-xs text-[#1687a7] underline mb-3">
@@ -961,10 +1022,12 @@ function WorksheetLines({ lines, compact = false }) {
 
 function WorksheetQuestion({ card, selected, onSubmit }) {
   const [fills, setFills] = useState({});
+  const [visibleHints, setVisibleHints] = useState({});
   const lines = card.worksheetLines || [];
 
   useEffect(() => {
     setFills({});
+    setVisibleHints({});
   }, [card.id]);
 
   const shuffledChoicesByLine = useMemo(
@@ -1009,6 +1072,22 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
                 </span>
               ))}
             </div>
+            {line.hint && (
+              <div className="mt-2 text-left">
+                <button
+                  type="button"
+                  onClick={() => setVisibleHints((prev) => ({ ...prev, [lineIndex]: !prev[lineIndex] }))}
+                  className="rounded border border-[#73bfd7] bg-white px-2 py-1 text-xs font-bold text-[#166078] hover:bg-[#e8f7fb]"
+                >
+                  ヒント
+                </button>
+                {visibleHints[lineIndex] && (
+                  <div className="mt-2 rounded border border-[#b7d6e6] bg-white/80 p-2 text-xs leading-5 text-[#42677a]">
+                    {line.hint}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="mt-2 flex flex-wrap gap-2">
               {(shuffledChoicesByLine[lineIndex] || []).map((choice) => (
                 <button
@@ -1141,6 +1220,7 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
   const [qIndex, setQIndex] = useState(0);
   const [question, setQuestion] = useState(() => makeQuestion(queue.current[0], allCards));
   const [selected, setSelected] = useState(null);
+  const [showHint, setShowHint] = useState(false);
   const [correctCount, setCorrectCount] = useState(0);
   const [updates, setUpdates] = useState([]);
   const [xp, setXp] = useState(0);
@@ -1170,6 +1250,7 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
     setQIndex(nextIndex);
     setQuestion(makeQuestion(queue.current[nextIndex], allCards));
     setSelected(null);
+    setShowHint(false);
   };
 
   const q = question;
@@ -1194,6 +1275,22 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
           </div>
         ) : (
           <div className="font-display text-2xl font-bold text-[#16475f] py-4 border-b-2 border-[#b7d6e6] inline-block px-4">{q.card.en}</div>
+        )}
+        {q.type !== "worksheet" && q.card.hint && (
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() => setShowHint((value) => !value)}
+              className="rounded border border-[#73bfd7] bg-white px-3 py-1.5 text-xs font-bold text-[#166078] hover:bg-[#e8f7fb]"
+            >
+              ヒント
+            </button>
+            {showHint && (
+              <div className="mx-auto mt-3 max-w-sm rounded border border-[#b7d6e6] bg-white/80 p-3 text-left text-xs leading-5 text-[#42677a]">
+                {q.card.hint}
+              </div>
+            )}
+          </div>
         )}
       </div>
 
