@@ -37,6 +37,8 @@ const CONTENT_VERSION = "2026-07-05-google-sheet-default";
 const USER_ID_KEY = "viewer-id";
 const USER_PREFS_KEY = "user-prefs";
 const DEFAULT_USER_PREFS = { tone: "fresh" };
+const APP_NAME = "GDM Review";
+const APP_VERSION = "0.0.0";
 const PERSONAL_EXPORT_TYPE = "gdm-review-personal-settings";
 const PERSONAL_EXPORT_VERSION = 2;
 
@@ -579,6 +581,43 @@ function normalizePersonalPayload(payload, version = 1) {
     stats: normalizeStats(source.stats || learning.stats || source.learningStats || {}),
     progressByLesson: normalizeProgressByLesson(source.progressByLesson || learning.progressByLesson || source.progress || learning.progress || {}),
   };
+}
+
+function buildAppInfoText() {
+  return [
+    `${APP_NAME}`,
+    `Version: ${APP_VERSION}`,
+    `Generated at: ${new Date().toISOString()}`,
+    "",
+    "Copyright:",
+    "Copyright (c) 2026 Kazuro Ueshima. All rights reserved.",
+    "",
+    "Application License:",
+    "Proprietary. Redistribution, modification, or commercial use requires permission from the copyright holder.",
+    "",
+    "Third-party software:",
+    "This application uses third-party packages subject to their respective licenses.",
+    "- React 19.2.7: MIT License",
+    "- lucide-react 1.23.0: ISC License",
+    "- PapaParse 5.5.4: MIT License",
+    "- SheetJS xlsx 0.18.5: Apache-2.0 License",
+    "- Vite and build tooling: subject to their respective package licenses",
+    "",
+    "Notes:",
+    "Lesson content, worksheet images, audio files, and imported spreadsheet data may have separate rights and permissions.",
+  ].join("\n");
+}
+
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function parsePersonalExport(text) {
@@ -1126,6 +1165,7 @@ function SettingsScreen({
       <ViewerIdPanel viewerId={viewerId} onChangeViewerId={onChangeViewerId} />
       <TonePanel tone={tone} onChangeTone={onChangeTone} />
       <PersonalSettingsPanel onExport={onExportPersonalSettings} onImport={onImportPersonalSettings} />
+      <AppInfoPanel />
       <button
         type="button"
         onClick={() => setShowTeacherSettings((value) => !value)}
@@ -1134,6 +1174,25 @@ function SettingsScreen({
         {showTeacherSettings ? "設定(先生用)を閉じる" : "設定(先生用)"}
       </button>
       {showTeacherSettings && <SheetSyncPanel onImportRows={onImportRows} />}
+    </div>
+  );
+}
+
+function AppInfoPanel() {
+  return (
+    <div className="card-paper rounded-md border border-[#b7d6e6] p-4">
+      <div className="mb-2 font-display font-bold text-[#16475f]">アプリ情報</div>
+      <p className="mb-3 text-xs leading-5 text-[#42677a]">
+        ソフトバージョン、Copyright、ライセンス、利用している主なライブラリの情報をテキストでダウンロードできます。
+      </p>
+      <button
+        type="button"
+        onClick={() => downloadTextFile("gdm-review-app-info.txt", buildAppInfoText())}
+        className="flex w-full items-center justify-center gap-2 rounded border border-[#73bfd7] bg-white px-3 py-2 text-sm font-bold text-[#166078] hover:bg-[#e8f7fb]"
+      >
+        <Download size={16} />
+        アプリ情報をダウンロード
+      </button>
     </div>
   );
 }
