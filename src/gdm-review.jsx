@@ -38,7 +38,7 @@ const USER_ID_KEY = "viewer-id";
 const USER_PREFS_KEY = "user-prefs";
 const DEFAULT_USER_PREFS = { tone: "fresh" };
 const APP_NAME = "GDM Review";
-const APP_VERSION = "0.0.0";
+const APP_VERSION = "1.0.0";
 const PERSONAL_EXPORT_TYPE = "gdm-review-personal-settings";
 const PERSONAL_EXPORT_VERSION = 2;
 
