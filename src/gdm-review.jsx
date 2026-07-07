@@ -205,6 +205,14 @@ function getCardAnswerText(card) {
   }
   return card?.en || "";
 }
+function getRandomEnglishVoice() {
+  if (typeof window === "undefined" || !window.speechSynthesis?.getVoices) return null;
+  const voices = window.speechSynthesis
+    .getVoices()
+    .filter((voice) => /^en[-_]/i.test(voice.lang || ""));
+  if (!voices.length) return null;
+  return voices[Math.floor(Math.random() * voices.length)];
+}
 function speakText(text, { onStart, onEnd, onError } = {}) {
   const utteranceText = (text || "").trim();
   if (!utteranceText || typeof window === "undefined" || !window.speechSynthesis) {
@@ -214,6 +222,11 @@ function speakText(text, { onStart, onEnd, onError } = {}) {
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(utteranceText);
   utterance.lang = "en-US";
+  const voice = getRandomEnglishVoice();
+  if (voice) {
+    utterance.voice = voice;
+    utterance.lang = voice.lang || "en-US";
+  }
   utterance.rate = 0.88;
   utterance.pitch = 1;
   utterance.onstart = () => onStart?.();
@@ -527,6 +540,10 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (typeof window !== "undefined" && window.speechSynthesis?.getVoices) {
+      window.speechSynthesis.getVoices();
+      window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+    }
     (async () => {
       const statsRaw = await safeGet("stats", false);
       const st = statsRaw ? JSON.parse(statsRaw) : { xp: 0, reviewDates: [] };
@@ -536,6 +553,9 @@ export default function App() {
       if (storedViewerId) await loadContentForViewer(storedViewerId);
       setReady(true);
     })();
+    return () => {
+      if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.onvoiceschanged = null;
+    };
   }, []);
 
   const persistStats = useCallback(async (s) => {
