@@ -187,6 +187,64 @@ function parseClozeSentence(value, answerValue) {
 function isAnswerCorrect(expected, actual) {
   return !expected || actual === expected;
 }
+function fillClozeText(line, values) {
+  const parts = line?.clozeParts;
+  if (!parts?.length) return line?.sentence || "";
+  return parts
+    .map((part, index) => `${part}${values?.[index] || ""}`)
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function getLineAnswerText(line) {
+  return fillClozeText(line, line?.answers || []);
+}
+function getCardAnswerText(card) {
+  if (card?.worksheetLines?.length) {
+    return card.worksheetLines.map(getLineAnswerText).filter(Boolean).join(" ");
+  }
+  return card?.en || "";
+}
+function speakText(text, { onStart, onEnd, onError } = {}) {
+  const utteranceText = (text || "").trim();
+  if (!utteranceText || typeof window === "undefined" || !window.speechSynthesis) {
+    onError?.();
+    return false;
+  }
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(utteranceText);
+  utterance.lang = "en-US";
+  utterance.rate = 0.88;
+  utterance.pitch = 1;
+  utterance.onstart = () => onStart?.();
+  utterance.onend = () => onEnd?.();
+  utterance.onerror = () => onError?.();
+  window.speechSynthesis.speak(utterance);
+  return true;
+}
+function playCorrectSound() {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.28);
+    gain.connect(ctx.destination);
+    [660, 880].forEach((frequency, index) => {
+      const oscillator = ctx.createOscillator();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(frequency, ctx.currentTime + index * 0.08);
+      oscillator.connect(gain);
+      oscillator.start(ctx.currentTime + index * 0.08);
+      oscillator.stop(ctx.currentTime + 0.3);
+    });
+    window.setTimeout(() => ctx.close(), 450);
+  } catch {
+    // Audio can be blocked by browser policy; answering a question should unlock it, but fail quietly.
+  }
+}
 function normalizeViewerId(value) {
   return (value || "").trim().replace(/^id[:：]/i, "").toLowerCase();
 }
@@ -966,12 +1024,13 @@ function CardVisual({ card, className, iconSize = 18 }) {
   return <span className={className}>{card.emoji || "🖼️"}</span>;
 }
 
-function AudioButton({ src, label = "音声" }) {
+function AudioButton({ src, text, label = "音声" }) {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [hasError, setHasError] = useState(false);
   const drivePreviewUrl = getGoogleDrivePreviewUrl(src);
   const playableSrc = normalizeAudioUrl(src);
+  const speechText = (text || "").trim();
 
   useEffect(() => {
     return () => {
@@ -979,10 +1038,11 @@ function AudioButton({ src, label = "音声" }) {
         audioRef.current.pause();
         audioRef.current = null;
       }
+      if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
     };
   }, []);
 
-  if (!playableSrc) return null;
+  if (!playableSrc && !speechText) return null;
 
   if (drivePreviewUrl) {
     return (
@@ -1003,6 +1063,24 @@ function AudioButton({ src, label = "音声" }) {
 
   const handlePlay = async () => {
     setHasError(false);
+    if (!playableSrc && speechText) {
+      if (isPlaying && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+        setIsPlaying(false);
+        return;
+      }
+      const ok = speakText(speechText, {
+        onStart: () => setIsPlaying(true),
+        onEnd: () => setIsPlaying(false),
+        onError: () => {
+          setIsPlaying(false);
+          setHasError(true);
+        },
+      });
+      if (!ok) setHasError(true);
+      return;
+    }
+
     if (!audioRef.current || audioRef.current.src !== playableSrc) {
       if (audioRef.current) audioRef.current.pause();
       audioRef.current = new Audio(playableSrc);
@@ -1067,7 +1145,7 @@ function WorksheetLines({ lines, compact = false }) {
               ))}
             </div>
           )}
-          {line.audioUrl && <div className="mt-1"><AudioButton src={line.audioUrl} /></div>}
+          {(line.audioUrl || getLineAnswerText(line)) && <div className="mt-1"><AudioButton src={line.audioUrl} text={getLineAnswerText(line)} /></div>}
         </div>
       ))}
     </div>
@@ -1171,7 +1249,7 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
                 )}
               </div>
             )}
-            {line.audioUrl && <div className="mt-2"><AudioButton src={line.audioUrl} /></div>}
+            {(line.audioUrl || getLineAnswerText(line)) && <div className="mt-2"><AudioButton src={line.audioUrl} text={getLineAnswerText(line)} /></div>}
           </div>
         ))}
       </div>
@@ -1233,7 +1311,7 @@ function LessonDetail({ lesson, progress, onEnsureProgress, onBack, onStartRevie
                 <>
                   <div className="font-display text-[#16475f] font-semibold truncate">{c.en}</div>
                   {c.note && <div className="text-xs text-[#42677a] truncate">{c.note}</div>}
-                  {c.audioUrl && <div className="mt-1"><AudioButton src={c.audioUrl} /></div>}
+                  {(c.audioUrl || c.en) && <div className="mt-1"><AudioButton src={c.audioUrl} text={c.en} /></div>}
                 </>
               )}
             </div>
@@ -1292,13 +1370,19 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
     const newLevel = isCorrect ? Math.min(baseLevel + 1, 5) : Math.max(baseLevel - 1, 0);
     const dueAt = now + INTERVAL_DAYS[newLevel] * DAY_MS;
     setUpdates((u) => [...u.filter((x) => x.id !== question.card.id), { id: question.card.id, level: newLevel, dueAt, lastReview: now }]);
-    if (isCorrect) { setCorrectCount((n) => n + 1); setXp((x) => x + 10); }
+    if (isCorrect) {
+      playCorrectSound();
+      speakText(getCardAnswerText(question.card));
+      setCorrectCount((n) => n + 1);
+      setXp((x) => x + 10);
+    }
   };
   const handleChoice = (choice) => {
     recordAnswer(choice.id === question.card.id, choice.id);
   };
 
   const handleNext = () => {
+    if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
     const nextIndex = qIndex + 1;
     if (nextIndex >= total) { onFinish({ total, correct: correctCount, xpEarned: xp, updates }); return; }
     setQIndex(nextIndex);
