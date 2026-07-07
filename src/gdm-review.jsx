@@ -1379,9 +1379,9 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
 
   const total = queue.current.length;
 
-  const recordAnswer = (isCorrect, choiceId = question.card.id) => {
+  const recordAnswer = (isCorrect, choiceId = question.card.id, skipped = false) => {
     if (selected) return;
-    setSelected({ choiceId, isCorrect });
+    setSelected({ choiceId, isCorrect, skipped });
 
     const now = Date.now();
     const prevLevel = (initialProgress[question.card.id] || emptyProgress()).level;
@@ -1399,6 +1399,9 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
   };
   const handleChoice = (choice) => {
     recordAnswer(choice.id === question.card.id, choice.id);
+  };
+  const handleSkip = () => {
+    recordAnswer(false, "skip", true);
   };
 
   const handleNext = () => {
@@ -1476,10 +1479,20 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
         </>
       )}
 
+      {!selected && (
+        <button
+          type="button"
+          onClick={handleSkip}
+          className="mt-4 w-full rounded-md border border-[#b7d6e6] bg-white/70 py-2 font-display text-sm font-semibold text-[#42677a] hover:bg-[#e8f7fb]"
+        >
+          スキップ
+        </button>
+      )}
+
       {selected && (
         <div className="mt-5 slide-up">
           <div className={`text-center font-display font-bold text-lg mb-3 ${selected.isCorrect ? "text-[#16805d]" : "text-[#b42335]"}`}>
-            {selected.isCorrect ? "✓ 正解！" : q.type === "pic2en" ? `✗ ${q.card.en}` : "✗"}
+            {selected.isCorrect ? "✓ 正解！" : selected.skipped ? `スキップ: ${getCardAnswerText(q.card)}` : q.type === "pic2en" ? `✗ ${q.card.en}` : "✗"}
           </div>
           <button onClick={handleNext} className="w-full rounded-md py-3 bg-[#1687a7] text-[#ffffff] font-display font-bold text-lg hover:brightness-110 transition">
             {qIndex + 1 >= total ? "結果を見る" : "次へ"}
