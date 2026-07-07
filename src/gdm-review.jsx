@@ -1179,7 +1179,7 @@ function PersonalSettingsPanel({ onExport, onImport }) {
         <div>炎: 連続して復習した日数です。</div>
         <div>星: XPです。正解するほど増える学習ポイントです。</div>
         <div>メダル: レッスンを全問正解した回数です。</div>
-        <div>Lv: 個人レベルです。XPが10増えるごとに1上がり、メダル1つにつき50上がります。</div>
+        <div>Lv: 個人レベルです。復習を進めたり、全問正解を重ねたりすると上がります。</div>
       </div>
       <textarea
         value={text}
