@@ -460,6 +460,16 @@ function reviewIntervalDays(level) {
   return 30;
 }
 
+function getTotalPerfectBadges(perfectByLesson = {}) {
+  return Object.values(perfectByLesson).reduce((sum, value) => sum + (Number(value) || 0), 0);
+}
+
+function getPersonalLevel(stats = {}) {
+  const xp = Number(stats.xp || 0);
+  const badgeCount = getTotalPerfectBadges(stats.perfectByLesson || {});
+  return Math.min(MAX_LEVEL, Math.max(1, 1 + Math.floor(xp / 10) + badgeCount * 50));
+}
+
 function parseSheetBuffer(buffer, sourceName = "", contentType = "") {
   const lower = sourceName.toLowerCase().split("?")[0];
   const type = (contentType || "").toLowerCase();
@@ -794,7 +804,7 @@ export default function App() {
         <IdGate onSubmit={saveViewerId} />
       ) : (
         <div className="cabinet-bg min-h-screen">
-          <TopBar screen={screen} setScreen={setScreen} xp={stats.xp} streak={streak} />
+          <TopBar screen={screen} setScreen={setScreen} xp={stats.xp} level={getPersonalLevel(stats)} streak={streak} />
           <div className="max-w-2xl mx-auto px-4 pb-16">
             {screen.name === "home" && (
               <Home
@@ -817,7 +827,6 @@ export default function App() {
             {screen.name === "lesson" && lessons[screen.id] && (
               <LessonDetail
                 lesson={lessons[screen.id]}
-                progress={progressByLesson[screen.id]}
                 onEnsureProgress={() => loadProgress(screen.id)}
                 onBack={() => setScreen({ name: "home" })}
                 onStartReview={() => setScreen({ name: "review", id: screen.id })}
@@ -856,7 +865,7 @@ export default function App() {
 }
 
 /* ---------------- TopBar ---------------- */
-function TopBar({ screen, setScreen, xp, streak }) {
+function TopBar({ screen, setScreen, xp, level, streak }) {
   return (
     <div className="sticky top-0 z-30 backdrop-blur-sm bg-white/90 border-b border-[#d7eef6]">
       <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
@@ -866,6 +875,7 @@ function TopBar({ screen, setScreen, xp, streak }) {
         <div className="flex items-center gap-3 font-mono text-sm shrink-0">
           <div className="flex items-center gap-1 text-[#1687a7]"><Flame size={16} /> {streak}</div>
           <div className="flex items-center gap-1 text-[#16805d]"><Star size={16} /> {xp}</div>
+          <div className="rounded bg-[#d7f5eb] px-2 py-1 text-[11px] font-bold text-[#16805d]">Lv {level}</div>
           <button onClick={() => setScreen({ name: "settings" })} className="flex items-center gap-1 text-[10px] bg-[#1687a7] text-white px-2 py-1 rounded" title="設定">
             <Settings size={12} /> 設定
           </button>
@@ -1169,7 +1179,7 @@ function PersonalSettingsPanel({ onExport, onImport }) {
         <div>炎: 連続して復習した日数です。</div>
         <div>星: XPです。正解するほど増える学習ポイントです。</div>
         <div>メダル: レッスンを全問正解した回数です。</div>
-        <div>Lv: カードごとの習熟度です。正解で大きく上がり、スキップや不正解で少し下がります。</div>
+        <div>Lv: 個人レベルです。XPが10増えるごとに1上がり、メダル1つにつき50上がります。</div>
       </div>
       <textarea
         value={text}
@@ -1556,13 +1566,11 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
 }
 
 /* ---------------- Lesson Detail ---------------- */
-function LessonDetail({ lesson, progress, onEnsureProgress, onBack, onStartReview }) {
+function LessonDetail({ lesson, onEnsureProgress, onBack, onStartReview }) {
   useEffect(() => {
     onEnsureProgress();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lesson.id]);
-
-  const prog = progress || {};
 
   return (
     <div className="pt-6">
@@ -1603,7 +1611,6 @@ function LessonDetail({ lesson, progress, onEnsureProgress, onBack, onStartRevie
                 </>
               )}
             </div>
-            <MasteryDots level={(prog[c.id] || emptyProgress()).level} />
           </div>
         ))}
       </div>
