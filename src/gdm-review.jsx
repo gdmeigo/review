@@ -5,7 +5,7 @@ import {
   ArrowLeft, Check, X, Play,
   Flame, Star, ChevronRight, Loader2, RotateCcw,
   Home as HomeIcon, Settings, ImageOff,
-  FileSpreadsheet, Volume2
+  FileSpreadsheet, Volume2, Download, Upload, Palette
 } from "lucide-react";
 
 /* ---------------------------------------------------------
@@ -33,6 +33,10 @@ const DEFAULT_SHEET_DOWNLOAD_URL = DEFAULT_EXCEL_URL;
 const CONTENT_IMPORTED_KEY = "content-imported";
 const CONTENT_VERSION = "2026-07-05-google-sheet-default";
 const USER_ID_KEY = "viewer-id";
+const USER_PREFS_KEY = "user-prefs";
+const DEFAULT_USER_PREFS = { tone: "fresh" };
+const PERSONAL_EXPORT_TYPE = "gdm-review-personal-settings";
+const PERSONAL_EXPORT_VERSION = 1;
 
 function getGoogleDriveFileId(url) {
   try {
@@ -468,6 +472,56 @@ function parseSheetBuffer(buffer, sourceName = "", contentType = "") {
   return parsed.data;
 }
 
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+    .join(",")}}`;
+}
+
+async function checksumText(text) {
+  if (typeof crypto !== "undefined" && crypto.subtle && typeof TextEncoder !== "undefined") {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+async function buildPersonalExport(payload) {
+  const checksum = await checksumText(stableStringify(payload));
+  return JSON.stringify(
+    {
+      type: PERSONAL_EXPORT_TYPE,
+      version: PERSONAL_EXPORT_VERSION,
+      checksum,
+      payload,
+    },
+    null,
+    2
+  );
+}
+
+async function parsePersonalExport(text) {
+  const data = JSON.parse(text || "{}");
+  if (data.type !== PERSONAL_EXPORT_TYPE || data.version !== PERSONAL_EXPORT_VERSION || !data.payload || !data.checksum) {
+    throw new Error("このアプリの個人設定データではありません");
+  }
+  const expected = await checksumText(stableStringify(data.payload));
+  if (expected !== data.checksum) {
+    throw new Error("チェックサムが一致しません。内容が変更されている可能性があります");
+  }
+  return data.payload;
+}
+
 export default function App() {
   const [ready, setReady] = useState(false);
   const [lessons, setLessons] = useState({});
@@ -476,6 +530,7 @@ export default function App() {
   const [progressByLesson, setProgressByLesson] = useState({});
   const [screen, setScreen] = useState({ name: "home" });
   const [viewerId, setViewerId] = useState("");
+  const [userPrefs, setUserPrefs] = useState(DEFAULT_USER_PREFS);
 
   const safeGet = async (key, shared) => {
     try {
@@ -547,9 +602,12 @@ export default function App() {
     (async () => {
       const statsRaw = await safeGet("stats", false);
       const st = statsRaw ? JSON.parse(statsRaw) : { xp: 0, reviewDates: [] };
+      const prefsRaw = await safeGet(USER_PREFS_KEY, false);
+      const prefs = prefsRaw ? { ...DEFAULT_USER_PREFS, ...JSON.parse(prefsRaw) } : DEFAULT_USER_PREFS;
       const storedViewerId = normalizeViewerId(await safeGet(USER_ID_KEY, false));
       setViewerId(storedViewerId);
       setStats(st);
+      setUserPrefs(prefs);
       if (storedViewerId) await loadContentForViewer(storedViewerId);
       setReady(true);
     })();
@@ -577,6 +635,12 @@ export default function App() {
   const persistProgress = useCallback(async (lessonId, prog) => {
     setProgressByLesson((prev) => ({ ...prev, [lessonId]: prog }));
     await safeSet("progress:" + lessonId, JSON.stringify(prog), false);
+  }, []);
+
+  const persistUserPrefs = useCallback(async (prefs) => {
+    const nextPrefs = { ...DEFAULT_USER_PREFS, ...prefs };
+    setUserPrefs(nextPrefs);
+    await safeSet(USER_PREFS_KEY, JSON.stringify(nextPrefs), false);
   }, []);
 
   // ---- spreadsheet sync ----
@@ -608,6 +672,46 @@ export default function App() {
     setReady(true);
   };
 
+  const exportPersonalSettings = async () => {
+    const allProgress = {};
+    for (const meta of index) {
+      const lessonProgress = progressByLesson[meta.id] || JSON.parse((await safeGet("progress:" + meta.id, false)) || "{}");
+      if (Object.keys(lessonProgress).length > 0) allProgress[meta.id] = lessonProgress;
+    }
+    return buildPersonalExport({
+      exportedAt: new Date().toISOString(),
+      viewerId,
+      prefs: userPrefs,
+      stats,
+      progressByLesson: allProgress,
+    });
+  };
+
+  const importPersonalSettings = async (text) => {
+    const payload = await parsePersonalExport(text);
+    const nextViewerId = normalizeViewerId(payload.viewerId || viewerId);
+    const nextPrefs = { ...DEFAULT_USER_PREFS, ...(payload.prefs || {}) };
+    const nextStats = {
+      xp: Number(payload.stats?.xp || 0),
+      reviewDates: Array.isArray(payload.stats?.reviewDates) ? payload.stats.reviewDates : [],
+      perfectByLesson: payload.stats?.perfectByLesson || {},
+    };
+    const nextProgress = payload.progressByLesson && typeof payload.progressByLesson === "object" ? payload.progressByLesson : {};
+
+    if (nextViewerId) {
+      await safeSet(USER_ID_KEY, nextViewerId, false);
+      setViewerId(nextViewerId);
+      await loadContentForViewer(nextViewerId);
+    }
+    await persistUserPrefs(nextPrefs);
+    await persistStats(nextStats);
+    for (const [lessonId, progress] of Object.entries(nextProgress)) {
+      await safeSet("progress:" + lessonId, JSON.stringify(progress), false);
+    }
+    setProgressByLesson(nextProgress);
+    setScreen({ name: "home" });
+  };
+
   const allCardsFlat = useMemo(
     () => Object.values(lessons).flatMap((l) => l.cards.map((c) => ({ ...c, lessonId: l.id }))),
     [lessons]
@@ -626,7 +730,7 @@ export default function App() {
   }, [stats.reviewDates]);
 
   return (
-    <div style={{ fontFamily: "'Inter', sans-serif" }} className="min-h-screen w-full">
+    <div style={{ fontFamily: "'Inter', sans-serif" }} className={`min-h-screen w-full tone-${userPrefs.tone || "fresh"}`}>
       <style>{`
         ${FONT_IMPORT}
         .font-display { font-family: 'Fraunces', serif; }
@@ -645,6 +749,23 @@ export default function App() {
         .punch-hole { width: 14px; height: 14px; border-radius: 50%; background: #d7eef6; box-shadow: inset 0 1px 2px rgba(22,71,95,0.22); }
         .drawer-front { background: linear-gradient(180deg, #ffffff 0%, #e8f7fb 100%); border: 1px solid #b7d6e6; }
         .brass { background: linear-gradient(180deg, #d7f5eb 0%, #9fe3d1 100%); border: 1px solid #73cdb9; }
+        .tone-soft .cabinet-bg {
+          background-color: #fffaf7;
+          background-image:
+            radial-gradient(circle at 16% 12%, rgba(255,184,108,0.16), transparent 26%),
+            linear-gradient(180deg, #ffffff 0%, #fff3ec 58%, #fffaf7 100%);
+        }
+        .tone-soft .drawer-front { background: linear-gradient(180deg, #ffffff 0%, #fff1e9 100%); border-color: #f0c7ad; }
+        .tone-soft .brass { background: linear-gradient(180deg, #fff0c8 0%, #ffd489 100%); border-color: #e7b55d; }
+        .tone-night .cabinet-bg {
+          background-color: #122033;
+          background-image:
+            radial-gradient(circle at 20% 10%, rgba(91,188,214,0.2), transparent 26%),
+            linear-gradient(180deg, #17263b 0%, #101b2b 100%);
+        }
+        .tone-night .card-paper { background: rgba(255,255,255,0.95); }
+        .tone-night .drawer-front { background: linear-gradient(180deg, #f8fbff 0%, #dcecff 100%); border-color: #91b7db; }
+        .tone-night .brass { background: linear-gradient(180deg, #d9f6ff 0%, #8dd6ed 100%); border-color: #62bad5; }
         @keyframes stampIn { 0% { transform: scale(2.2) rotate(-12deg); opacity: 0; } 60% { transform: scale(0.95) rotate(-12deg); opacity: 1; } 100% { transform: scale(1) rotate(-12deg); opacity: 1; } }
         .stamp { animation: stampIn 0.35s ease-out; }
         @keyframes slideUp { from { transform: translateY(14px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
@@ -671,7 +792,15 @@ export default function App() {
               />
             )}
             {screen.name === "settings" && (
-              <SettingsScreen viewerId={viewerId} onChangeViewerId={saveViewerId} onImportRows={importRows} />
+              <SettingsScreen
+                viewerId={viewerId}
+                onChangeViewerId={saveViewerId}
+                tone={userPrefs.tone || "fresh"}
+                onChangeTone={(tone) => persistUserPrefs({ ...userPrefs, tone })}
+                onImportRows={importRows}
+                onExportPersonalSettings={exportPersonalSettings}
+                onImportPersonalSettings={importPersonalSettings}
+              />
             )}
             {screen.name === "lesson" && lessons[screen.id] && (
               <LessonDetail
@@ -903,11 +1032,29 @@ function PerfectBadges({ count }) {
   );
 }
 
-function SettingsScreen({ viewerId, onChangeViewerId, onImportRows }) {
+function SettingsScreen({
+  viewerId,
+  onChangeViewerId,
+  tone,
+  onChangeTone,
+  onImportRows,
+  onExportPersonalSettings,
+  onImportPersonalSettings,
+}) {
+  const [showTeacherSettings, setShowTeacherSettings] = useState(false);
   return (
-    <div className="pt-6">
+    <div className="space-y-4 pt-6">
       <ViewerIdPanel viewerId={viewerId} onChangeViewerId={onChangeViewerId} />
-      <SheetSyncPanel onImportRows={onImportRows} />
+      <TonePanel tone={tone} onChangeTone={onChangeTone} />
+      <PersonalSettingsPanel onExport={onExportPersonalSettings} onImport={onImportPersonalSettings} />
+      <button
+        type="button"
+        onClick={() => setShowTeacherSettings((value) => !value)}
+        className="w-full rounded-md border border-[#73bfd7] bg-white/90 px-4 py-3 text-left font-display font-bold text-[#166078] shadow-sm hover:bg-[#e8f7fb]"
+      >
+        {showTeacherSettings ? "設定(先生用)を閉じる" : "設定(先生用)"}
+      </button>
+      {showTeacherSettings && <SheetSyncPanel onImportRows={onImportRows} />}
     </div>
   );
 }
@@ -936,6 +1083,105 @@ function ViewerIdPanel({ viewerId, onChangeViewerId }) {
         </button>
       </div>
     </form>
+  );
+}
+
+function TonePanel({ tone, onChangeTone }) {
+  const tones = [
+    { id: "fresh", label: "さわやか", swatch: "bg-[#73bfd7]" },
+    { id: "soft", label: "やわらか", swatch: "bg-[#ffd489]" },
+    { id: "night", label: "夜", swatch: "bg-[#17263b]" },
+  ];
+  return (
+    <div className="card-paper rounded-md border border-[#b7d6e6] p-4">
+      <div className="mb-3 flex items-center gap-2 font-display font-bold text-[#16475f]">
+        <Palette size={18} />
+        画面トーン
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        {tones.map((option) => {
+          const selected = tone === option.id;
+          return (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => onChangeTone(option.id)}
+              className={
+                "flex items-center justify-center gap-2 rounded border px-3 py-2 text-sm font-bold " +
+                (selected ? "border-[#1687a7] bg-[#e8f7fb] text-[#16475f]" : "border-[#b7d6e6] bg-white text-[#42677a] hover:bg-[#f4fbfd]")
+              }
+            >
+              <span className={`h-3 w-3 rounded-full ${option.swatch}`} />
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PersonalSettingsPanel({ onExport, onImport }) {
+  const [text, setText] = useState("");
+  const [status, setStatus] = useState(null);
+
+  const handleExport = async () => {
+    setStatus({ type: "loading", message: "エクスポート中..." });
+    try {
+      const exported = await onExport();
+      setText(exported);
+      setStatus({ type: "success", message: "個人設定をエクスポートしました" });
+    } catch (error) {
+      setStatus({ type: "error", message: "エクスポートに失敗しました: " + (error?.message || "不明なエラー") });
+    }
+  };
+
+  const handleImport = async () => {
+    setStatus({ type: "loading", message: "インポート中..." });
+    try {
+      await onImport(text);
+      setStatus({ type: "success", message: "個人設定をインポートしました" });
+    } catch (error) {
+      setStatus({ type: "error", message: "インポートに失敗しました: " + (error?.message || "不明なエラー") });
+    }
+  };
+
+  return (
+    <div className="card-paper rounded-md border border-[#b7d6e6] p-4">
+      <div className="mb-2 font-display font-bold text-[#16475f]">個人設定の引き継ぎ</div>
+      <p className="mb-3 text-xs leading-5 text-[#42677a]">
+        XP、復習状況、バッチ、画面トーンをテキストとして保存できます。機種変更時はエクスポートした内容を新しい端末で貼り付けてインポートしてください。
+      </p>
+      <textarea
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        rows={7}
+        className="mb-3 w-full rounded border border-[#b7d6e6] bg-white px-3 py-2 font-mono text-[11px] leading-5 text-[#16475f] outline-none focus:border-[#1687a7]"
+        placeholder="エクスポート内容、またはインポートする個人設定を貼り付け"
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={handleExport}
+          className="flex items-center justify-center gap-2 rounded bg-[#1687a7] px-3 py-2 text-sm font-bold text-white hover:brightness-110"
+        >
+          <Download size={16} />
+          エクスポート
+        </button>
+        <button
+          type="button"
+          onClick={handleImport}
+          disabled={!text.trim()}
+          className="flex items-center justify-center gap-2 rounded border border-[#73bfd7] bg-white px-3 py-2 text-sm font-bold text-[#166078] hover:bg-[#e8f7fb] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Upload size={16} />
+          インポート
+        </button>
+      </div>
+      {status && (
+        <p className={"mt-2 text-xs " + (status.type === "error" ? "text-[#b42335]" : "text-[#16805d]")}>{status.message}</p>
+      )}
+    </div>
   );
 }
 
@@ -971,6 +1217,9 @@ function SheetSyncPanel({ onImportRows }) {
         CSVまたはExcelファイルからワークシートを読み込めます。列は
         <span className="font-mono"> lesson_no / lesson / item / image / sentence / choices / answer / audio / note / hint / point / ID:任意のID </span>
         を使えます。image、audioにはGoogle Driveに配置した画像と音声をURLで指定してください。Google Driveの上位フォルダ設定はリンクを知っている人が閲覧できる設定にしてください。
+      </p>
+      <p className="mb-3 text-xs leading-5 text-[#42677a]">
+        audio列は、ブラウザの読み上げではなく音声をカスタマイズしたい場合だけリンクを書いてください。未入力の場合は正解の英文を読み上げます。
       </p>
       <p className="text-xs text-[#42677a] mb-3">
         ID列は <span className="font-mono">ID:sample</span> のように作ります。入力IDと同じ列に数値があるレッスンだけ表示します。
