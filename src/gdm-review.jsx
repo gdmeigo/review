@@ -23,7 +23,9 @@ import {
 
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;0,9..144,900;1,9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');`;
 
-const INTERVAL_DAYS = [0, 1, 2, 4, 7, 14]; // by mastery level 0-5
+const MAX_LEVEL = 9999;
+const LEVEL_GAIN_CORRECT = 50;
+const LEVEL_LOSS_WRONG = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const emptyProgress = () => ({ level: 0, dueAt: 0, lastReview: 0 });
@@ -446,6 +448,16 @@ function buildContentFromRows(rows, viewerId = "") {
 function isExcelBuffer(buffer) {
   const bytes = new Uint8Array(buffer.slice(0, 4));
   return bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+}
+
+function reviewIntervalDays(level) {
+  if (level < 50) return 0;
+  if (level < 150) return 1;
+  if (level < 350) return 2;
+  if (level < 700) return 4;
+  if (level < 1400) return 7;
+  if (level < 2800) return 14;
+  return 30;
 }
 
 function parseSheetBuffer(buffer, sourceName = "", contentType = "") {
@@ -1152,6 +1164,13 @@ function PersonalSettingsPanel({ onExport, onImport }) {
       <p className="mb-3 text-xs leading-5 text-[#42677a]">
         XP、復習状況、バッチ、画面トーンをテキストとして保存できます。機種変更時はエクスポートした内容を新しい端末で貼り付けてインポートしてください。
       </p>
+      <div className="mb-3 rounded border border-[#b7d6e6] bg-white/70 p-3 text-xs leading-5 text-[#42677a]">
+        <div className="mb-1 font-display font-bold text-[#16475f]">表示の意味</div>
+        <div>炎: 連続して復習した日数です。</div>
+        <div>星: XPです。正解するほど増える学習ポイントです。</div>
+        <div>メダル: レッスンを全問正解した回数です。</div>
+        <div>Lv: カードごとの習熟度です。正解で大きく上がり、スキップや不正解で少し下がります。</div>
+      </div>
       <textarea
         value={text}
         onChange={(event) => setText(event.target.value)}
@@ -1593,9 +1612,13 @@ function LessonDetail({ lesson, progress, onEnsureProgress, onBack, onStartRevie
 }
 
 function MasteryDots({ level }) {
+  const pct = Math.min(100, Math.max(0, (level / MAX_LEVEL) * 100));
   return (
-    <div className="hidden sm:flex gap-0.5 mr-1" aria-label={`習熟度 ${level}/5`}>
-      {[0, 1, 2, 3, 4].map((i) => <div key={i} className={`w-1.5 h-1.5 rounded-full ${i < level ? "bg-[#16805d]" : "bg-[#b7d6e6]"}`} />)}
+    <div className="hidden min-w-[76px] items-center gap-2 sm:flex" aria-label={`レベル ${level}`}>
+      <span className="font-mono text-[10px] font-bold text-[#16805d]">Lv {level}</span>
+      <span className="h-1.5 w-8 overflow-hidden rounded-full bg-[#d7eef6]">
+        <span className="block h-full rounded-full bg-[#16805d]" style={{ width: `${pct}%` }} />
+      </span>
     </div>
   );
 }
@@ -1636,8 +1659,8 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
     const prevLevel = (initialProgress[question.card.id] || emptyProgress()).level;
     const alreadyUpdated = updates.find((u) => u.id === question.card.id);
     const baseLevel = alreadyUpdated ? alreadyUpdated.level : prevLevel;
-    const newLevel = isCorrect ? Math.min(baseLevel + 1, 5) : Math.max(baseLevel - 1, 0);
-    const dueAt = now + INTERVAL_DAYS[newLevel] * DAY_MS;
+    const newLevel = isCorrect ? Math.min(baseLevel + LEVEL_GAIN_CORRECT, MAX_LEVEL) : Math.max(baseLevel - LEVEL_LOSS_WRONG, 0);
+    const dueAt = now + reviewIntervalDays(newLevel) * DAY_MS;
     setUpdates((u) => [...u.filter((x) => x.id !== question.card.id), { id: question.card.id, level: newLevel, dueAt, lastReview: now }]);
     if (isCorrect) {
       playCorrectSound();
