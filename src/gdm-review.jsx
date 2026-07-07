@@ -24,8 +24,10 @@ import {
 const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;0,9..144,900;1,9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');`;
 
 const MAX_LEVEL = 9999;
-const LEVEL_GAIN_CORRECT = 50;
-const LEVEL_LOSS_WRONG = 10;
+const LEVEL_GAIN_CORRECT = 30;
+const LEVEL_LOSS_WRONG = 8;
+const XP_PER_PERSONAL_LEVEL = 20;
+const PERFECT_BADGE_LEVEL_BONUS = 25;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const emptyProgress = () => ({ level: 0, dueAt: 0, lastReview: 0 });
@@ -109,6 +111,7 @@ const FIELD_ALIASES = {
   note: ["note", "メモ", "memo"],
   hint: ["hint", "ヒント"],
   point: ["point", "ポイント"],
+  pointImage: ["point_image", "pointimage", "point_image_url", "pointimageurl", "ポイント画像", "ポイント画像url"],
 };
 const normKey = (k) => (k || "").toString().trim().toLowerCase().replace(/\s+/g, "");
 function getField(rowObj, field) {
@@ -327,14 +330,15 @@ function itemSortValue(item) {
   const letter = raw.match(/[A-Za-z]/)?.[0]?.toUpperCase();
   return letter ? 100000 + letter.charCodeAt(0) : Number.MAX_SAFE_INTEGER;
 }
-function addLessonPoint(lessonBucket, item, point) {
+function addLessonPoint(lessonBucket, item, point, pointImage) {
   const text = (point || "").trim();
-  if (!text) return;
+  const image = normalizeImageUrl(pointImage);
+  if (!text && !image) return;
   const sortValue = itemSortValue(item);
-  const key = `${sortValue}:${text}`;
+  const key = `${sortValue}:${text}:${image}`;
   if (lessonBucket.pointKeys.has(key)) return;
   lessonBucket.pointKeys.add(key);
-  lessonBucket.points.push({ sortValue, text });
+  lessonBucket.points.push({ sortValue, text, image });
 }
 function buildContentFromRows(rows, viewerId = "") {
   const order = [];
@@ -349,7 +353,10 @@ function buildContentFromRows(rows, viewerId = "") {
     const answer = getField(row, "answer");
     const cloze = parseClozeSentence(en, answer);
     const audioUrl = normalizeAudioUrl(getField(row, "audio"));
-    if (!en && choices.length === 0 && !answer) return;
+    const point = getField(row, "point");
+    const pointImage = getField(row, "pointImage");
+    const hasQuestionContent = !!(en || choices.length > 0 || answer || audioUrl);
+    if (!hasQuestionContent && !point && !pointImage) return;
     const title = getField(row, "lesson") || "未分類";
     if (rowMatchesViewer(row, normalizedViewerId)) {
       visibleTitles.add(title);
@@ -367,7 +374,6 @@ function buildContentFromRows(rows, viewerId = "") {
     const image = normalizeImageUrl(getField(row, "image"));
     const note = getField(row, "note");
     const hint = getField(row, "hint");
-    const point = getField(row, "point");
     if (!byTitle[title]) {
       byTitle[title] = { title, lessonNo, emoji: emoji || "📇", cards: [], cardsByItem: {}, points: [], pointKeys: new Set() };
       order.push(title);
@@ -376,8 +382,8 @@ function buildContentFromRows(rows, viewerId = "") {
     } else if (lessonNo && !byTitle[title].lessonNo) {
       byTitle[title].lessonNo = lessonNo;
     }
-    addLessonPoint(byTitle[title], item, point);
-    const isWorksheetRow = !!(sentence || choices.length > 0 || answer || audioUrl || item);
+    addLessonPoint(byTitle[title], item, point, pointImage);
+    const isWorksheetRow = hasQuestionContent && !!(sentence || choices.length > 0 || answer || audioUrl || item);
     if (isWorksheetRow) {
       const itemKey = item || image || en || `row-${byTitle[title].cards.length + 1}`;
       let card = byTitle[title].cardsByItem[itemKey];
@@ -440,10 +446,16 @@ function buildContentFromRows(rows, viewerId = "") {
       .slice()
       .sort((a, b) => a.sortValue - b.sortValue)
       .map((entry) => entry.text)
+      .filter(Boolean)
       .join("\n");
+    const pointItems = l.points
+      .slice()
+      .sort((a, b) => a.sortValue - b.sortValue)
+      .map(({ text, image }) => ({ text, image }))
+      .filter((entry) => entry.text || entry.image);
     const displayOrder = resolvedDisplayOrders[title] || "";
-    lessonsMap[lessonId] = { id: lessonId, title, lessonNo: l.lessonNo, displayOrder, emoji: l.emoji, cards, point };
-    index.push({ id: lessonId, title, lessonNo: l.lessonNo, displayOrder, emoji: l.emoji, count: cards.length, point });
+    lessonsMap[lessonId] = { id: lessonId, title, lessonNo: l.lessonNo, displayOrder, emoji: l.emoji, cards, point, pointItems };
+    index.push({ id: lessonId, title, lessonNo: l.lessonNo, displayOrder, emoji: l.emoji, count: cards.length, point, pointItems });
   });
   return { index, lessonsMap };
 }
@@ -453,12 +465,12 @@ function isExcelBuffer(buffer) {
 }
 
 function reviewIntervalDays(level) {
-  if (level < 50) return 0;
-  if (level < 150) return 1;
-  if (level < 350) return 2;
-  if (level < 700) return 4;
-  if (level < 1400) return 7;
-  if (level < 2800) return 14;
+  if (level < 90) return 0;
+  if (level < 270) return 1;
+  if (level < 540) return 2;
+  if (level < 1080) return 4;
+  if (level < 2160) return 7;
+  if (level < 4320) return 14;
   return 30;
 }
 
@@ -469,7 +481,7 @@ function getTotalPerfectBadges(perfectByLesson = {}) {
 function getPersonalLevel(stats = {}) {
   const xp = Number(stats.xp || 0);
   const badgeCount = getTotalPerfectBadges(stats.perfectByLesson || {});
-  return Math.min(MAX_LEVEL, Math.max(1, 1 + Math.floor(xp / 10) + badgeCount * 50));
+  return Math.min(MAX_LEVEL, Math.max(1, 1 + Math.floor(xp / XP_PER_PERSONAL_LEVEL) + badgeCount * PERFECT_BADGE_LEVEL_BONUS));
 }
 
 function parseSheetBuffer(buffer, sourceName = "", contentType = "") {
@@ -1099,7 +1111,7 @@ function Home({ index, perfectByLesson, onOpen }) {
                 </div>
                 <ChevronRight className="text-[#1687a7]" size={20} />
               </button>
-              {meta.point && (
+              {(meta.point || meta.pointItems?.length > 0) && (
                 <button
                   type="button"
                   onClick={() => setPointLesson(meta)}
@@ -1118,9 +1130,16 @@ function Home({ index, perfectByLesson, onOpen }) {
 }
 
 function PointModal({ lesson, onClose }) {
+  const pointItems = lesson.pointItems?.length
+    ? lesson.pointItems
+    : (lesson.point || "")
+      .split("\n")
+      .filter(Boolean)
+      .map((text) => ({ text, image: "" }));
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#16475f]/30 px-4">
-      <div className="card-paper w-full max-w-md rounded-md border border-[#b7d6e6] p-5 shadow-xl">
+      <div className="card-paper max-h-[86vh] w-full max-w-md overflow-y-auto rounded-md border border-[#b7d6e6] p-5 shadow-xl">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
             <div className="font-display text-lg font-bold text-[#16475f]">{lesson.title}</div>
@@ -1130,7 +1149,20 @@ function PointModal({ lesson, onClose }) {
             閉じる
           </button>
         </div>
-        <div className="whitespace-pre-line text-sm leading-7 text-[#16475f]">{lesson.point}</div>
+        <div className="space-y-4 text-sm leading-7 text-[#16475f]">
+          {pointItems.map((point, index) => (
+            <div key={`${point.text}-${point.image}-${index}`} className="space-y-2">
+              {point.image && (
+                <img
+                  src={point.image}
+                  alt={point.text || "ポイント画像"}
+                  className="max-h-64 w-full rounded border border-[#b7d6e6] bg-white object-contain"
+                />
+              )}
+              {point.text && <div className="whitespace-pre-line">{point.text}</div>}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1341,10 +1373,10 @@ function PersonalSettingsPanel({ onExport, onImport }) {
 function SheetSyncPanel({ onImportRows }) {
   const [status, setStatus] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
-  const csvExample = `lesson_no,lesson,item,image,sentence,choices,answer,audio,note,hint,point,ID:sample
-1,WorkP22,1,https://example.com/picture1.png,This is a {{man}}.,man|woman,,https://example.com/audio1.mp3,{{ }} の中が空欄になります,人物を表す語を選びます,be動詞の後ろは名詞を置けます,1
-1,WorkP22,1,https://example.com/picture1.png,Her {{book}} is on the {{table}}.,book|bag|table|desk,,,,,,1
-1,WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,____ を使う場合は answer に正解を書きます,,,1`;
+  const csvExample = `lesson_no,lesson,item,image,sentence,choices,answer,audio,note,hint,point,point_image,ID:sample
+1,WorkP22,1,https://example.com/picture1.png,This is a {{man}}.,man|woman,,https://example.com/audio1.mp3,{{ }} の中が空欄になります,人物を表す語を選びます,be動詞の後ろは名詞を置けます,https://example.com/point1.png,1
+1,WorkP22,1,https://example.com/picture1.png,Her {{book}} is on the {{table}}.,book|bag|table|desk,,,,,,,1
+1,WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,____ を使う場合は answer に正解を書きます,,,,1`;
 
   const doFileImport = async (file) => {
     if (!file) return;
@@ -1367,8 +1399,8 @@ function SheetSyncPanel({ onImportRows }) {
       </div>
       <p className="text-xs text-[#42677a] mb-3">
         CSVまたはExcelファイルからワークシートを読み込めます。列は
-        <span className="font-mono"> lesson_no / lesson / item / image / sentence / choices / answer / audio / note / hint / point / ID:任意のID </span>
-        を使えます。image、audioにはGoogle Driveに配置した画像と音声をURLで指定してください。Google Driveの上位フォルダ設定はリンクを知っている人が閲覧できる設定にしてください。
+        <span className="font-mono"> lesson_no / lesson / item / image / sentence / choices / answer / audio / note / hint / point / point_image / ID:任意のID </span>
+        を使えます。image、point_image、audioにはGoogle Driveに配置した画像と音声をURLで指定してください。Google Driveの上位フォルダ設定はリンクを知っている人が閲覧できる設定にしてください。
       </p>
       <p className="mb-3 text-xs leading-5 text-[#42677a]">
         audio列は、ブラウザの読み上げではなく音声をカスタマイズしたい場合だけリンクを書いてください。未入力の場合は正解の英文を読み上げます。
@@ -1393,7 +1425,7 @@ function SheetSyncPanel({ onImportRows }) {
         <p className="mb-2">
           <span className="font-mono">choices</span> は1つの列にまとめ、
           <span className="font-mono"> man|woman|girlまたはman/woman/girl </span>
-          のように区切って書きます。問題では選択肢がランダム順で表示されます。
+          のように区切って書きます。<span className="font-mono">point_image</span> にURLを書くと、レッスン一覧の「ポイント」内に画像も表示されます。
         </p>
         <pre className="overflow-x-auto whitespace-pre rounded bg-[#f4fbfd] p-2 font-mono text-[10px] leading-5 text-[#16475f]">{csvExample}</pre>
       </div>
