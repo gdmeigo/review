@@ -38,7 +38,7 @@ const USER_ID_KEY = "viewer-id";
 const USER_PREFS_KEY = "user-prefs";
 const DEFAULT_USER_PREFS = { tone: "fresh" };
 const PERSONAL_EXPORT_TYPE = "gdm-review-personal-settings";
-const PERSONAL_EXPORT_VERSION = 1;
+const PERSONAL_EXPORT_VERSION = 2;
 
 function getGoogleDriveFileId(url) {
   try {
@@ -524,6 +524,8 @@ async function buildPersonalExport(payload) {
     {
       type: PERSONAL_EXPORT_TYPE,
       version: PERSONAL_EXPORT_VERSION,
+      schemaVersion: PERSONAL_EXPORT_VERSION,
+      exportedAt: payload.meta?.exportedAt || payload.exportedAt || new Date().toISOString(),
       checksum,
       payload,
     },
@@ -532,16 +534,64 @@ async function buildPersonalExport(payload) {
   );
 }
 
+function asPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function normalizeStats(value) {
+  const stats = asPlainObject(value);
+  const xp = Number(stats.xp ?? stats.totalXp ?? stats.points ?? 0);
+  const reviewDates = Array.isArray(stats.reviewDates)
+    ? stats.reviewDates
+    : Array.isArray(stats.streakDates)
+      ? stats.streakDates
+      : [];
+  return {
+    ...stats,
+    xp: Number.isFinite(xp) ? xp : 0,
+    reviewDates,
+    perfectByLesson: asPlainObject(stats.perfectByLesson || stats.badges || stats.perfect || {}),
+  };
+}
+
+function normalizeProgressByLesson(value) {
+  const progress = asPlainObject(value);
+  const normalized = {};
+  for (const [lessonId, lessonProgress] of Object.entries(progress)) {
+    if (lessonId && lessonProgress && typeof lessonProgress === "object" && !Array.isArray(lessonProgress)) {
+      normalized[lessonId] = lessonProgress;
+    }
+  }
+  return normalized;
+}
+
+function normalizePersonalPayload(payload, version = 1) {
+  const source = asPlainObject(payload);
+  const user = asPlainObject(source.user);
+  const learning = asPlainObject(source.learning);
+  const prefs = asPlainObject(source.prefs || user.prefs || source.preferences || {});
+  return {
+    schemaVersion: PERSONAL_EXPORT_VERSION,
+    sourceVersion: version,
+    exportedAt: source.exportedAt || source.meta?.exportedAt || "",
+    viewerId: source.viewerId || user.viewerId || user.id || "",
+    prefs: { ...DEFAULT_USER_PREFS, ...prefs },
+    stats: normalizeStats(source.stats || learning.stats || source.learningStats || {}),
+    progressByLesson: normalizeProgressByLesson(source.progressByLesson || learning.progressByLesson || source.progress || learning.progress || {}),
+  };
+}
+
 async function parsePersonalExport(text) {
   const data = JSON.parse(text || "{}");
-  if (data.type !== PERSONAL_EXPORT_TYPE || data.version !== PERSONAL_EXPORT_VERSION || !data.payload || !data.checksum) {
+  const version = Number(data.version);
+  if (data.type !== PERSONAL_EXPORT_TYPE || !Number.isFinite(version) || version < 1 || version > PERSONAL_EXPORT_VERSION || !data.payload || !data.checksum) {
     throw new Error("このアプリの個人設定データではありません");
   }
   const expected = await checksumText(stableStringify(data.payload));
   if (expected !== data.checksum) {
     throw new Error("チェックサムが一致しません。内容が変更されている可能性があります");
   }
-  return data.payload;
+  return normalizePersonalPayload(data.payload, version);
 }
 
 export default function App() {
@@ -701,11 +751,18 @@ export default function App() {
       if (Object.keys(lessonProgress).length > 0) allProgress[meta.id] = lessonProgress;
     }
     return buildPersonalExport({
-      exportedAt: new Date().toISOString(),
-      viewerId,
-      prefs: userPrefs,
-      stats,
-      progressByLesson: allProgress,
+      meta: {
+        schemaVersion: PERSONAL_EXPORT_VERSION,
+        exportedAt: new Date().toISOString(),
+      },
+      user: {
+        viewerId,
+        prefs: userPrefs,
+      },
+      learning: {
+        stats,
+        progressByLesson: allProgress,
+      },
     });
   };
 
