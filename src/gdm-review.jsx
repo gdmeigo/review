@@ -985,8 +985,8 @@ export default function App() {
                     if (perfectByLesson[screen.id] < 1) delete perfectByLesson[screen.id];
                   }
                   const totalXp = (Number(stats.xp) || 0) + xpEarned;
-                  const levelGained = isLowScore ? 0 : Math.floor(totalXp / XP_LEVEL_THRESHOLD);
-                  const nextXp = isLowScore ? Math.min(totalXp, XP_LEVEL_THRESHOLD - 1) : totalXp % XP_LEVEL_THRESHOLD;
+                  const levelGained = Math.floor(totalXp / XP_LEVEL_THRESHOLD);
+                  const nextXp = totalXp % XP_LEVEL_THRESHOLD;
                   const levelLost = isLowScore ? 1 : 0;
                   const nextLevel = Math.max(1, Math.min(MAX_LEVEL, currentLevel + levelGained - levelLost));
                   const nextResult = { ...result, xpEarned, levelGained, levelLost, levelDelta: nextLevel - currentLevel };
