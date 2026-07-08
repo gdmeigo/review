@@ -1521,11 +1521,30 @@ function CardVisual({ card, className, iconSize = 18 }) {
 
 function AudioButton({ src, text, label = "音声" }) {
   const audioRef = useRef(null);
+  const playbackStateRef = useRef("idle");
+  const playAttemptRef = useRef(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
   const drivePreviewUrl = getGoogleDrivePreviewUrl(src);
   const playableSrc = normalizeAudioUrl(src);
   const speechText = (text || "").trim();
+
+  const setPlaybackState = (state) => {
+    playbackStateRef.current = state;
+    setIsPlaying(state === "playing");
+    setIsLoading(state === "loading");
+    if (state === "playing" || state === "loading") setHasError(false);
+  };
+
+  const markErrorIfStillWaiting = (attempt) => {
+    window.setTimeout(() => {
+      if (playAttemptRef.current === attempt && playbackStateRef.current === "loading") {
+        setPlaybackState("idle");
+        setHasError(true);
+      }
+    }, 2500);
+  };
 
   useEffect(() => {
     return () => {
@@ -1533,6 +1552,7 @@ function AudioButton({ src, text, label = "音声" }) {
         audioRef.current.pause();
         audioRef.current = null;
       }
+      playbackStateRef.current = "idle";
       if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
     };
   }, []);
@@ -1557,34 +1577,39 @@ function AudioButton({ src, text, label = "音声" }) {
   }
 
   const handlePlay = async () => {
+    const attempt = playAttemptRef.current + 1;
+    playAttemptRef.current = attempt;
     setHasError(false);
     if (!playableSrc && speechText) {
       if (isPlaying && window.speechSynthesis) {
         window.speechSynthesis.cancel();
-        setIsPlaying(false);
+        setPlaybackState("idle");
         return;
       }
+      setPlaybackState("loading");
       const ok = speakText(speechText, {
-        onStart: () => setIsPlaying(true),
-        onEnd: () => setIsPlaying(false),
+        onStart: () => setPlaybackState("playing"),
+        onEnd: () => setPlaybackState("idle"),
         onError: () => {
-          setIsPlaying(false);
-          setHasError(true);
+          markErrorIfStillWaiting(attempt);
         },
       });
-      if (!ok) setHasError(true);
+      if (!ok) {
+        setPlaybackState("idle");
+        setHasError(true);
+      }
       return;
     }
 
     if (!audioRef.current || audioRef.current.src !== playableSrc) {
       if (audioRef.current) audioRef.current.pause();
       audioRef.current = new Audio(playableSrc);
-      audioRef.current.addEventListener("ended", () => setIsPlaying(false));
-      audioRef.current.addEventListener("pause", () => setIsPlaying(false));
-      audioRef.current.addEventListener("play", () => setIsPlaying(true));
+      audioRef.current.addEventListener("ended", () => setPlaybackState("idle"));
+      audioRef.current.addEventListener("pause", () => setPlaybackState("idle"));
+      audioRef.current.addEventListener("play", () => setPlaybackState("playing"));
+      audioRef.current.addEventListener("playing", () => setPlaybackState("playing"));
       audioRef.current.addEventListener("error", () => {
-        setIsPlaying(false);
-        setHasError(true);
+        markErrorIfStillWaiting(attempt);
       });
     }
 
@@ -1592,11 +1617,11 @@ function AudioButton({ src, text, label = "音声" }) {
       if (isPlaying) {
         audioRef.current.pause();
       } else {
+        setPlaybackState("loading");
         await audioRef.current.play();
       }
     } catch {
-      setIsPlaying(false);
-      setHasError(true);
+      markErrorIfStillWaiting(attempt);
     }
   };
 
@@ -1608,7 +1633,7 @@ function AudioButton({ src, text, label = "音声" }) {
       title={hasError ? "音声を再生できませんでした" : label}
     >
       <Volume2 size={13} />
-      {hasError ? "再生不可" : isPlaying ? "停止" : label}
+      {hasError ? "再生不可" : isPlaying ? "停止" : isLoading ? "準備中" : label}
     </button>
   );
 }
