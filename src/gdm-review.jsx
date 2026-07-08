@@ -974,16 +974,22 @@ export default function App() {
                   dates.add(todayStr());
                   const perfectByLesson = { ...(stats.perfectByLesson || {}) };
                   let xpEarned = result.xpEarned;
+                  const currentLevel = getPersonalLevel(stats);
+                  const isLowScore = result.total > 0 && result.correct / result.total < 0.5;
                   if (result.total > 0 && result.correct === result.total) {
                     const previousPerfectCount = perfectByLesson[screen.id] || 0;
                     perfectByLesson[screen.id] = previousPerfectCount + 1;
                     xpEarned += previousPerfectCount >= 3 ? EXTRA_PERFECT_BADGE_XP_BONUS : PERFECT_BADGE_XP_BONUS;
+                  } else if (isLowScore && (perfectByLesson[screen.id] || 0) > 0) {
+                    perfectByLesson[screen.id] -= 1;
+                    if (perfectByLesson[screen.id] < 1) delete perfectByLesson[screen.id];
                   }
                   const totalXp = (Number(stats.xp) || 0) + xpEarned;
-                  const levelGained = Math.floor(totalXp / XP_LEVEL_THRESHOLD);
-                  const nextXp = totalXp % XP_LEVEL_THRESHOLD;
-                  const nextLevel = Math.min(MAX_LEVEL, getPersonalLevel(stats) + levelGained);
-                  const nextResult = { ...result, xpEarned, levelGained };
+                  const levelGained = isLowScore ? 0 : Math.floor(totalXp / XP_LEVEL_THRESHOLD);
+                  const nextXp = isLowScore ? Math.min(totalXp, XP_LEVEL_THRESHOLD - 1) : totalXp % XP_LEVEL_THRESHOLD;
+                  const levelLost = isLowScore ? 1 : 0;
+                  const nextLevel = Math.max(1, Math.min(MAX_LEVEL, currentLevel + levelGained - levelLost));
+                  const nextResult = { ...result, xpEarned, levelGained, levelLost, levelDelta: nextLevel - currentLevel };
                   await persistStats({ ...stats, xp: nextXp, level: nextLevel, reviewDates: Array.from(dates), perfectByLesson });
                   setScreen({ name: "summary", id: screen.id, result: nextResult });
                 }}
@@ -1354,8 +1360,8 @@ function PersonalSettingsPanel({ onExport, onImport }) {
         <div className="mb-1 font-display font-bold text-[#16475f]">表示の意味</div>
         <div>炎: 連続して復習した日数です。</div>
         <div>星: XPです。正解するほど増える学習ポイントです。</div>
-        <div>メダル: レッスンを全問正解した回数です。</div>
-        <div>Lv: 個人レベルです。復習を進めたり、全問正解を重ねたりすると上がります。</div>
+        <div>メダル: レッスンを全問正解した回数です。正答率が5割未満だと1つ減ることがあります。</div>
+        <div>Lv: 個人レベルです。復習状況に応じて上がり、正答率が5割未満だと下がることがあります。</div>
       </div>
       <div className="grid grid-cols-2 gap-2">
         <button
@@ -1978,7 +1984,8 @@ function Summary({ result, onReviewAgain, onHome }) {
       <div className="text-6xl mb-3">{pct >= 80 ? "🏅" : pct >= 50 ? "📗" : "📖"}</div>
       <h2 className="font-display text-2xl font-bold text-[#16475f] mb-1">セッション終了</h2>
       <p className="text-[#1687a7] mb-6 font-mono text-sm">{result.correct} / {result.total} 正解（{pct}%）・ +{result.xpEarned} XP</p>
-      {result.levelGained > 0 && <p className="-mt-4 mb-6 font-display text-sm font-bold text-[#16805d]">Lv +{result.levelGained}</p>}
+      {result.levelDelta > 0 && <p className="-mt-4 mb-6 font-display text-sm font-bold text-[#16805d]">Lv +{result.levelDelta}</p>}
+      {result.levelDelta < 0 && <p className="-mt-4 mb-6 font-display text-sm font-bold text-[#b42335]">Lv {result.levelDelta}</p>}
       <div className="flex flex-col gap-3 max-w-xs mx-auto">
         <button onClick={onReviewAgain} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#16805d] text-[#ffffff] font-display font-bold hover:brightness-110 transition"><RotateCcw size={18} /> もう一度復習する</button>
         <button onClick={onHome} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#1687a7] text-[#ffffff] font-display font-semibold hover:brightness-110 transition"><HomeIcon size={16} /> レッスン一覧へ</button>
