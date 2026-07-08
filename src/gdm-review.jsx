@@ -28,6 +28,9 @@ const LEVEL_GAIN_CORRECT = 30;
 const LEVEL_LOSS_WRONG = 8;
 const XP_PER_PERSONAL_LEVEL = 20;
 const PERFECT_BADGE_LEVEL_BONUS = 25;
+const XP_LEVEL_THRESHOLD = 100;
+const PERFECT_BADGE_XP_BONUS = 30;
+const EXTRA_PERFECT_BADGE_XP_BONUS = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const emptyProgress = () => ({ level: 0, dueAt: 0, lastReview: 0 });
@@ -110,6 +113,7 @@ const FIELD_ALIASES = {
   audio: ["audio", "audiourl", "audio_url", "sound", "音声", "音声url"],
   note: ["note", "メモ", "memo"],
   hint: ["hint", "ヒント"],
+  hintImage: ["hint_image", "hintimage", "hint_image_url", "hintimageurl", "ヒント画像", "ヒント画像url"],
   point: ["point", "ポイント"],
   pointImage: ["point_image", "pointimage", "point_image_url", "pointimageurl", "ポイント画像", "ポイント画像url"],
 };
@@ -374,6 +378,7 @@ function buildContentFromRows(rows, viewerId = "") {
     const image = normalizeImageUrl(getField(row, "image"));
     const note = getField(row, "note");
     const hint = getField(row, "hint");
+    const hintImage = normalizeImageUrl(getField(row, "hintImage"));
     if (!byTitle[title]) {
       byTitle[title] = { title, lessonNo, emoji: emoji || "📇", cards: [], cardsByItem: {}, points: [], pointKeys: new Set() };
       order.push(title);
@@ -396,6 +401,7 @@ function buildContentFromRows(rows, viewerId = "") {
       if (emoji && !card.emoji) card.emoji = emoji;
       if (note && !card.note) card.note = note;
       if (hint && !card.hint) card.hint = hint;
+      if (hintImage && !card.hintImage) card.hintImage = hintImage;
       if (audioUrl && !card.audioUrl) card.audioUrl = audioUrl;
       card.worksheetLines.push({
         sentence: cloze.sentence,
@@ -406,9 +412,10 @@ function buildContentFromRows(rows, viewerId = "") {
         audioUrl,
         note,
         hint,
+        hintImage,
       });
     } else {
-      byTitle[title].cards.push({ en, image, emoji, note, hint, audioUrl });
+      byTitle[title].cards.push({ en, image, emoji, note, hint, hintImage, audioUrl });
     }
   });
 
@@ -435,6 +442,7 @@ function buildContentFromRows(rows, viewerId = "") {
         en: c.en,
         note: c.note,
         hint: c.hint,
+        hintImage: c.hintImage,
         visualType: c.image ? "photo" : "emoji",
         photoUrl: c.image || undefined,
         audioUrl: c.audioUrl || undefined,
@@ -479,6 +487,8 @@ function getTotalPerfectBadges(perfectByLesson = {}) {
 }
 
 function getPersonalLevel(stats = {}) {
+  const level = Number(stats.level ?? stats.personalLevel ?? stats.lv);
+  if (Number.isFinite(level) && level > 0) return Math.min(MAX_LEVEL, Math.floor(level));
   const xp = Number(stats.xp || 0);
   const badgeCount = getTotalPerfectBadges(stats.perfectByLesson || {});
   return Math.min(MAX_LEVEL, Math.max(1, 1 + Math.floor(xp / XP_PER_PERSONAL_LEVEL) + badgeCount * PERFECT_BADGE_LEVEL_BONUS));
@@ -555,6 +565,7 @@ function asPlainObject(value) {
 function normalizeStats(value) {
   const stats = asPlainObject(value);
   const xp = Number(stats.xp ?? stats.totalXp ?? stats.points ?? 0);
+  const rawLevel = Number(stats.level ?? stats.personalLevel ?? stats.lv);
   const reviewDates = Array.isArray(stats.reviewDates)
     ? stats.reviewDates
     : Array.isArray(stats.streakDates)
@@ -563,6 +574,7 @@ function normalizeStats(value) {
   return {
     ...stats,
     xp: Number.isFinite(xp) ? xp : 0,
+    level: Number.isFinite(rawLevel) && rawLevel > 0 ? Math.min(MAX_LEVEL, Math.floor(rawLevel)) : getPersonalLevel(stats),
     reviewDates,
     perfectByLesson: asPlainObject(stats.perfectByLesson || stats.badges || stats.perfect || {}),
   };
@@ -830,6 +842,7 @@ export default function App() {
     const nextPrefs = { ...DEFAULT_USER_PREFS, ...(payload.prefs || {}) };
     const nextStats = {
       xp: Number(payload.stats?.xp || 0),
+      level: getPersonalLevel(payload.stats || {}),
       reviewDates: Array.isArray(payload.stats?.reviewDates) ? payload.stats.reviewDates : [],
       perfectByLesson: payload.stats?.perfectByLesson || {},
     };
@@ -960,11 +973,19 @@ export default function App() {
                   const dates = new Set(stats.reviewDates || []);
                   dates.add(todayStr());
                   const perfectByLesson = { ...(stats.perfectByLesson || {}) };
+                  let xpEarned = result.xpEarned;
                   if (result.total > 0 && result.correct === result.total) {
-                    perfectByLesson[screen.id] = (perfectByLesson[screen.id] || 0) + 1;
+                    const previousPerfectCount = perfectByLesson[screen.id] || 0;
+                    perfectByLesson[screen.id] = previousPerfectCount + 1;
+                    xpEarned += previousPerfectCount >= 3 ? EXTRA_PERFECT_BADGE_XP_BONUS : PERFECT_BADGE_XP_BONUS;
                   }
-                  await persistStats({ ...stats, xp: (stats.xp || 0) + result.xpEarned, reviewDates: Array.from(dates), perfectByLesson });
-                  setScreen({ name: "summary", id: screen.id, result });
+                  const totalXp = (Number(stats.xp) || 0) + xpEarned;
+                  const levelGained = Math.floor(totalXp / XP_LEVEL_THRESHOLD);
+                  const nextXp = totalXp % XP_LEVEL_THRESHOLD;
+                  const nextLevel = Math.min(MAX_LEVEL, getPersonalLevel(stats) + levelGained);
+                  const nextResult = { ...result, xpEarned, levelGained };
+                  await persistStats({ ...stats, xp: nextXp, level: nextLevel, reviewDates: Array.from(dates), perfectByLesson });
+                  setScreen({ name: "summary", id: screen.id, result: nextResult });
                 }}
                 onExit={() => setScreen({ name: "home" })}
               />
@@ -1299,24 +1320,24 @@ function TonePanel({ tone, onChangeTone }) {
 }
 
 function PersonalSettingsPanel({ onExport, onImport }) {
-  const [text, setText] = useState("");
   const [status, setStatus] = useState(null);
 
   const handleExport = async () => {
     setStatus({ type: "loading", message: "エクスポート中..." });
     try {
       const exported = await onExport();
-      setText(exported);
+      downloadTextFile("gdm-review-personal-settings.txt", exported);
       setStatus({ type: "success", message: "個人設定をエクスポートしました" });
     } catch (error) {
       setStatus({ type: "error", message: "エクスポートに失敗しました: " + (error?.message || "不明なエラー") });
     }
   };
 
-  const handleImport = async () => {
+  const handleImportFile = async (file) => {
+    if (!file) return;
     setStatus({ type: "loading", message: "インポート中..." });
     try {
-      await onImport(text);
+      await onImport(await file.text());
       setStatus({ type: "success", message: "個人設定をインポートしました" });
     } catch (error) {
       setStatus({ type: "error", message: "インポートに失敗しました: " + (error?.message || "不明なエラー") });
@@ -1327,7 +1348,7 @@ function PersonalSettingsPanel({ onExport, onImport }) {
     <div className="card-paper rounded-md border border-[#b7d6e6] p-4">
       <div className="mb-2 font-display font-bold text-[#16475f]">個人設定の引き継ぎ</div>
       <p className="mb-3 text-xs leading-5 text-[#42677a]">
-        XP、復習状況、バッチ、画面トーンをテキストとして保存できます。機種変更時はエクスポートした内容を新しい端末で貼り付けてインポートしてください。
+        XP、Lv、復習状況、バッチ、画面トーンをテキストファイルとして保存できます。機種変更時はエクスポートしたファイルを新しい端末でインポートしてください。
       </p>
       <div className="mb-3 rounded border border-[#b7d6e6] bg-white/70 p-3 text-xs leading-5 text-[#42677a]">
         <div className="mb-1 font-display font-bold text-[#16475f]">表示の意味</div>
@@ -1336,13 +1357,6 @@ function PersonalSettingsPanel({ onExport, onImport }) {
         <div>メダル: レッスンを全問正解した回数です。</div>
         <div>Lv: 個人レベルです。復習を進めたり、全問正解を重ねたりすると上がります。</div>
       </div>
-      <textarea
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        rows={7}
-        className="mb-3 w-full rounded border border-[#b7d6e6] bg-white px-3 py-2 font-mono text-[11px] leading-5 text-[#16475f] outline-none focus:border-[#1687a7]"
-        placeholder="エクスポート内容、またはインポートする個人設定を貼り付け"
-      />
       <div className="grid grid-cols-2 gap-2">
         <button
           type="button"
@@ -1352,15 +1366,19 @@ function PersonalSettingsPanel({ onExport, onImport }) {
           <Download size={16} />
           エクスポート
         </button>
-        <button
-          type="button"
-          onClick={handleImport}
-          disabled={!text.trim()}
-          className="flex items-center justify-center gap-2 rounded border border-[#73bfd7] bg-white px-3 py-2 text-sm font-bold text-[#166078] hover:bg-[#e8f7fb] disabled:cursor-not-allowed disabled:opacity-50"
-        >
+        <label className="flex cursor-pointer items-center justify-center gap-2 rounded border border-[#73bfd7] bg-white px-3 py-2 text-sm font-bold text-[#166078] hover:bg-[#e8f7fb]">
           <Upload size={16} />
           インポート
-        </button>
+          <input
+            type="file"
+            accept=".txt,.json,text/plain,application/json"
+            className="hidden"
+            onChange={(event) => {
+              handleImportFile(event.target.files?.[0]);
+              event.target.value = "";
+            }}
+          />
+        </label>
       </div>
       {status && (
         <p className={"mt-2 text-xs " + (status.type === "error" ? "text-[#b42335]" : "text-[#16805d]")}>{status.message}</p>
@@ -1373,10 +1391,10 @@ function PersonalSettingsPanel({ onExport, onImport }) {
 function SheetSyncPanel({ onImportRows }) {
   const [status, setStatus] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
-  const csvExample = `lesson_no,lesson,item,image,sentence,choices,answer,audio,note,hint,point,point_image,ID:sample
-1,WorkP22,1,https://example.com/picture1.png,This is a {{man}}.,man|woman,,https://example.com/audio1.mp3,{{ }} の中が空欄になります,人物を表す語を選びます,be動詞の後ろは名詞を置けます,https://example.com/point1.png,1
-1,WorkP22,1,https://example.com/picture1.png,Her {{book}} is on the {{table}}.,book|bag|table|desk,,,,,,,1
-1,WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,____ を使う場合は answer に正解を書きます,,,,1`;
+  const csvExample = `lesson_no,lesson,item,image,sentence,choices,answer,audio,note,hint,hint_image,point,point_image,ID:sample
+1,WorkP22,1,https://example.com/picture1.png,This is a {{man}}.,man|woman,,https://example.com/audio1.mp3,{{ }} の中が空欄になります,人物を表す語を選びます,https://example.com/hint1.png,be動詞の後ろは名詞を置けます,https://example.com/point1.png,1
+1,WorkP22,1,https://example.com/picture1.png,Her {{book}} is on the {{table}}.,book|bag|table|desk,,,,,,,,1
+1,WorkP22,2,https://example.com/picture2.png,This is a ____.,glass|bottle,glass,,____ を使う場合は answer に正解を書きます,,,,,1`;
 
   const doFileImport = async (file) => {
     if (!file) return;
@@ -1399,8 +1417,8 @@ function SheetSyncPanel({ onImportRows }) {
       </div>
       <p className="text-xs text-[#42677a] mb-3">
         CSVまたはExcelファイルからワークシートを読み込めます。列は
-        <span className="font-mono"> lesson_no / lesson / item / image / sentence / choices / answer / audio / note / hint / point / point_image / ID:任意のID </span>
-        を使えます。image、point_image、audioにはGoogle Driveに配置した画像と音声をURLで指定してください。Google Driveの上位フォルダ設定はリンクを知っている人が閲覧できる設定にしてください。
+        <span className="font-mono"> lesson_no / lesson / item / image / sentence / choices / answer / audio / note / hint / hint_image / point / point_image / ID:任意のID </span>
+        を使えます。image、hint_image、point_image、audioにはGoogle Driveに配置した画像と音声をURLで指定してください。Google Driveの上位フォルダ設定はリンクを知っている人が閲覧できる設定にしてください。
       </p>
       <p className="mb-3 text-xs leading-5 text-[#42677a]">
         audio列は、ブラウザの読み上げではなく音声をカスタマイズしたい場合だけリンクを書いてください。未入力の場合は正解の英文を読み上げます。
@@ -1425,7 +1443,7 @@ function SheetSyncPanel({ onImportRows }) {
         <p className="mb-2">
           <span className="font-mono">choices</span> は1つの列にまとめ、
           <span className="font-mono"> man|woman|girlまたはman/woman/girl </span>
-          のように区切って書きます。<span className="font-mono">point_image</span> にURLを書くと、レッスン一覧の「ポイント」内に画像も表示されます。
+          のように区切って書きます。<span className="font-mono">hint_image</span> と <span className="font-mono">point_image</span> にURLを書くと、ヒントやレッスン一覧の「ポイント」内に画像も表示されます。
         </p>
         <pre className="overflow-x-auto whitespace-pre rounded bg-[#f4fbfd] p-2 font-mono text-[10px] leading-5 text-[#16475f]">{csvExample}</pre>
       </div>
@@ -1605,6 +1623,21 @@ function WorksheetLines({ lines, compact = false }) {
   );
 }
 
+function HintContent({ text, image }) {
+  return (
+    <div className="space-y-2">
+      {image && (
+        <img
+          src={image}
+          alt={text || "ヒント画像"}
+          className="max-h-56 w-full rounded border border-[#b7d6e6] bg-white object-contain"
+        />
+      )}
+      {text && <div className="whitespace-pre-line">{text}</div>}
+    </div>
+  );
+}
+
 function WorksheetQuestion({ card, selected, onSubmit }) {
   const [fills, setFills] = useState({});
   const [visibleHints, setVisibleHints] = useState({});
@@ -1686,7 +1719,7 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
                 </button>
               )}
             </div>
-            {line.hint && (
+            {(line.hint || line.hintImage) && (
               <div className="mt-2 text-left">
                 <button
                   type="button"
@@ -1697,7 +1730,7 @@ function WorksheetQuestion({ card, selected, onSubmit }) {
                 </button>
                 {visibleHints[lineIndex] && (
                   <div className="mt-2 rounded border border-[#b7d6e6] bg-white/80 p-2 text-xs leading-5 text-[#42677a]">
-                    {line.hint}
+                    <HintContent text={line.hint} image={line.hintImage} />
                   </div>
                 )}
               </div>
@@ -1894,7 +1927,7 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
               );
             })}
           </div>
-          {q.card.hint && (
+          {(q.card.hint || q.card.hintImage) && (
             <div className="mt-3 text-center">
               <button
                 type="button"
@@ -1905,7 +1938,7 @@ function ReviewSession({ lesson, allCards, initialProgress, onExit, onFinish }) 
               </button>
               {showHint && (
                 <div className="mx-auto mt-3 max-w-sm rounded border border-[#b7d6e6] bg-white/80 p-3 text-left text-xs leading-5 text-[#42677a]">
-                  {q.card.hint}
+                  <HintContent text={q.card.hint} image={q.card.hintImage} />
                 </div>
               )}
             </div>
@@ -1945,6 +1978,7 @@ function Summary({ result, onReviewAgain, onHome }) {
       <div className="text-6xl mb-3">{pct >= 80 ? "🏅" : pct >= 50 ? "📗" : "📖"}</div>
       <h2 className="font-display text-2xl font-bold text-[#16475f] mb-1">セッション終了</h2>
       <p className="text-[#1687a7] mb-6 font-mono text-sm">{result.correct} / {result.total} 正解（{pct}%）・ +{result.xpEarned} XP</p>
+      {result.levelGained > 0 && <p className="-mt-4 mb-6 font-display text-sm font-bold text-[#16805d]">Lv +{result.levelGained}</p>}
       <div className="flex flex-col gap-3 max-w-xs mx-auto">
         <button onClick={onReviewAgain} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#16805d] text-[#ffffff] font-display font-bold hover:brightness-110 transition"><RotateCcw size={18} /> もう一度復習する</button>
         <button onClick={onHome} className="rounded-md py-3 flex items-center justify-center gap-2 bg-[#1687a7] text-[#ffffff] font-display font-semibold hover:brightness-110 transition"><HomeIcon size={16} /> レッスン一覧へ</button>
