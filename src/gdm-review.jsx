@@ -785,6 +785,23 @@ export default function App() {
     await safeSet(USER_PREFS_KEY, JSON.stringify(nextPrefs), false);
   }, []);
 
+  const resetPersonalSettings = async (lessonIndex = []) => {
+    const resetStats = { xp: 0, level: 1, reviewDates: [], perfectByLesson: {} };
+    const lessonIds = new Set([
+      ...index.map((meta) => meta.id),
+      ...lessonIndex.map((meta) => meta.id),
+      ...Object.keys(progressByLesson),
+    ]);
+    await safeDelete("stats", false);
+    await safeDelete(USER_PREFS_KEY, false);
+    for (const lessonId of lessonIds) {
+      await safeDelete("progress:" + lessonId, false);
+    }
+    setStats(resetStats);
+    setUserPrefs(DEFAULT_USER_PREFS);
+    setProgressByLesson({});
+  };
+
   // ---- spreadsheet sync ----
   const importRows = async (rows) => {
     const activeViewerId = normalizeViewerId(viewerId);
@@ -810,7 +827,8 @@ export default function App() {
     setViewerId(normalizedId);
     setScreen({ name: "home" });
     setReady(false);
-    await loadContentForViewer(normalizedId);
+    const loadedIndex = await loadContentForViewer(normalizedId);
+    if (normalizedId === "admin") await resetPersonalSettings(loadedIndex);
     setReady(true);
   };
 
